@@ -32,17 +32,18 @@
 |-------|---------|------|
 | はてなブックマーク | Hotentry RSS / カテゴリ RSS | IT カテゴリ中心 |
 | Zenn | 公式 API | 記事・トレンド |
-| Reddit | 公式 API | `r/programming`, `r/webdev`, `r/SaaS`, `r/SideProject`, `r/startups` |
 | Hacker News | Firebase API | Top / Ask HN |
-| Product Hunt | GraphQL API | 新着プロダクト |
 
-**X（Twitter）は除外**: 公式 API が月 $100 で無料化と両立不可。将来必要になった時点で再検討。
+**除外したソース**:
+- **X（Twitter）**: 公式 API が月 $100 で無料化と両立不可
+- **Reddit / Product Hunt**: 認証（OAuth / 開発者トークン）運用コストが高い割に日本語圏のシグナル密度が低いため初期スコープから除外
+- いずれも将来必要になった時点で再検討
 
 ## データベーススキーマ（概要）
 
 ### `raw_signals`（生データ）
 - `id` (uuid, pk)
-- `source` (enum: hatena / zenn / reddit / hackernews / producthunt)
+- `source` (enum: hatena / zenn / hackernews)
 - `external_id` (text, ソース内 ID、重複チェック用)
 - `url` (text)
 - `title` (text)
@@ -129,11 +130,11 @@
 ### S1: データ収集基盤（20〜25h）
 
 **完了基準**（外部から観察可能な振る舞い）:
-- 5 ソース全てから 6 時間おきに新規データ取得が動作する
+- 3 ソース全てから 6 時間おきに新規データ取得が動作する
 - `raw_signals` テーブルに重複なく蓄積される
 - GitHub Actions `collect.yml` が 6 時間おきに自動実行される
 - 実行失敗時に通知が届く（GitHub Actions の Email 通知 or Issue 自動作成）
-- 最初の 24 時間で 5 ソースから最低合計 50 件以上のデータが入る
+- 最初の 24 時間で 3 ソースから最低合計 50 件以上のデータが入る
 
 ### S2: LLM 構造化 + スコアリング（20〜25h）
 
@@ -177,10 +178,6 @@ GitHub Actions の Secrets に登録する環境変数:
 | `RESEND_API_KEY` | メール配信 |
 | `RESEND_FROM_EMAIL` | 送信元アドレス |
 | `RECIPIENT_EMAIL` | 自分のメールアドレス |
-| `REDDIT_CLIENT_ID` | Reddit API |
-| `REDDIT_CLIENT_SECRET` | Reddit API |
-| `REDDIT_USER_AGENT` | Reddit API |
-| `PRODUCTHUNT_TOKEN` | Product Hunt API |
 | `BRAVE_SEARCH_API_KEY` | 競合検索 |
 
 ## 将来の拡張（今回スコープ外）

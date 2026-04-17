@@ -4,7 +4,7 @@
 create extension if not exists "uuid-ossp";
 
 do $$ begin
-  create type source_type as enum ('hatena', 'zenn', 'reddit', 'hackernews', 'producthunt');
+  create type source_type as enum ('hatena', 'zenn', 'hackernews');
 exception
   when duplicate_object then null;
 end $$;

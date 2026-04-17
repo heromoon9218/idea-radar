@@ -2,9 +2,7 @@ import 'dotenv/config';
 import { supabase } from './db/supabase.js';
 import { collectHatena } from './collectors/hatena.js';
 import { collectZenn } from './collectors/zenn.js';
-import { collectReddit } from './collectors/reddit.js';
 import { collectHackerNews } from './collectors/hackernews.js';
-import { collectProductHunt } from './collectors/producthunt.js';
 import { RawSignalInputSchema } from './types.js';
 import type { RawSignalInput, SourceType } from './types.js';
 
@@ -46,9 +44,7 @@ async function main(): Promise<void> {
   const collectors: Array<[SourceType, CollectorFn]> = [
     ['hatena', () => collectHatena(WINDOW_MINUTES)],
     ['zenn', () => collectZenn(WINDOW_MINUTES)],
-    ['reddit', () => collectReddit(WINDOW_MINUTES)],
     ['hackernews', () => collectHackerNews(WINDOW_MINUTES)],
-    ['producthunt', () => collectProductHunt(WINDOW_MINUTES)],
   ];
 
   const outcomes = await Promise.all(

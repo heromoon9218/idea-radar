@@ -3,9 +3,7 @@ import { z } from 'zod';
 export const SourceTypeSchema = z.enum([
   'hatena',
   'zenn',
-  'reddit',
   'hackernews',
-  'producthunt',
 ]);
 export type SourceType = z.infer<typeof SourceTypeSchema>;
 
