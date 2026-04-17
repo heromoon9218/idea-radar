@@ -8,8 +8,8 @@ import { collectProductHunt } from './collectors/producthunt.js';
 import { RawSignalInputSchema } from './types.js';
 import type { RawSignalInput, SourceType } from './types.js';
 
-// cron は 2 時間おき。取りこぼし防止のため 10 分バッファを入れて 130 分ウィンドウで取得。
-const WINDOW_MINUTES = 130;
+// cron は 6 時間おき。取りこぼし防止のため 10 分バッファを入れて 370 分ウィンドウで取得。
+const WINDOW_MINUTES = 370;
 
 type CollectorFn = () => Promise<RawSignalInput[]>;
 

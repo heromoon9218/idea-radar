@@ -11,6 +11,7 @@
     "collect": "tsx src/collect.ts",
     "analyze": "tsx src/analyze.ts",
     "deliver": "tsx src/deliver.ts",
+    "smoke": "tsx src/scripts/smoke.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

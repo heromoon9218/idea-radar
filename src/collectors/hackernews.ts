@@ -1,9 +1,10 @@
 import type { RawSignalInput } from '../types.js';
 
 const BASE = 'https://hacker-news.firebaseio.com/v0';
-// HN の新規投稿は 1h あたり 40〜100 件なので、130 分ウィンドウをカバーするには 300 以上必要。
-// 早期脱出ロジック (oldestInBatch < sinceSec) があるので、実コストは通常走行時ほぼ変わらない。
-const MAX_IDS = 500;
+// HN の新規投稿は 1h あたり 40〜100 件なので、370 分ウィンドウをカバーするには最大 600 件超。
+// 余裕を持って 1500 まで拾う。早期脱出ロジック (oldestInBatch < sinceSec) があるので、
+// 実コストは通常走行時ほぼ変わらない。
+const MAX_IDS = 1500;
 const CONCURRENCY = 10;
 
 interface HNItem {
