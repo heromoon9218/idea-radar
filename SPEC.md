@@ -2,13 +2,13 @@
 
 ## 概要
 
-自分用の個人開発アイデア発見ツール。日本語圏のエンジニア向け情報ソースから「痛み」「愚痴」「ニーズ」を自動収集し、LLM で構造化・スコアリングした個人開発アイデアを**毎朝 Top 3〜5 件、自分宛メール**で配信する。
+自分用の個人開発アイデア発見ツール。日本語圏のエンジニア向け情報ソースから「痛み」「愚痴」「ニーズ」を自動収集し、LLM で構造化・スコアリングした個人開発アイデアを **JST 朝 8 時・夜 20 時の 1 日 2 回、各 Top 3〜5 件を自分宛メール**で配信する。
 
 ## スコープ
 
 - **完全に自分用**（SaaS 化しない、マルチユーザー対応なし、認証・課金・LP すべて不要）
-- **運用コスト最小化**: 月 **$5〜12** 目安（LLM API のみ）
-- 成功指標: 毎朝届くレポートから月に最低 1 件、実際に作りたいアイデアに出会える
+- **運用コスト最小化**: 月 **$10〜24** 目安（LLM API のみ、1 日 2 回配信）
+- 成功指標: 朝夜届くレポートから月に最低 1 件、実際に作りたいアイデアに出会える
 
 ## 技術構成
 
@@ -21,8 +21,8 @@
 - **言語**: Node.js 20+ / TypeScript
 - **DB**: Supabase Postgres（無料枠 500MB）
 - **LLM**:
-  - Claude Haiku: 構造化（日次、大量処理）
-  - Claude Sonnet: スコア精査（日次、少量のみ）
+  - Claude Haiku: 構造化（12h おき、大量処理）
+  - Claude Sonnet: スコア精査（12h おき、少量のみ）
 - **メール配信**: Resend（無料枠 100 通/日）
 - **競合検索**: Brave Search API（無料枠 2,000 req/月）
 
@@ -71,9 +71,11 @@
 ### `reports`（配信ログ）
 - `id` (uuid, pk)
 - `date` (date)
+- `slot` (enum: am / pm, 朝配信 or 夜配信)
 - `idea_ids` (uuid[])
 - `email_sent_at` (timestamptz)
 - `resend_id` (text)
+- UNIQUE(date, slot)
 
 ## 機能
 
@@ -83,24 +85,24 @@
 - 失敗時は GitHub Actions の通知（メール or Issue）
 
 ### 分析層（S2 で実装）
-- 過去 24 時間の `raw_signals` から未処理分を Haiku に投げる
+- 直近 12 時間の `raw_signals` から未処理分を Haiku に投げる
 - Haiku で: 痛み抽出 → アイデア化 → カテゴリ分類 → 類似マージ
 - 候補アイデア Top 10 を Sonnet に渡して 3 軸スコア精査
 - Brave Search で類似サービス検索 → `competitors` に格納
 - `ideas` テーブルに格納
 
 ### 配信層（S3 で実装）
-- 当日分の `ideas` から `total_score DESC` で Top 3〜5 選出
+- 直近 12 時間の未配信 `ideas` から `total_score DESC` で Top 3〜5 選出
 - Markdown レポート生成（テンプレート下記）
 - Resend で自分宛メール送信
-- レポートを `reports/YYYY-MM-DD.md` としてリポジトリに commit
+- レポートを `reports/YYYY-MM-DD-{am|pm}.md` としてリポジトリに commit
 
 ### Markdown レポートテンプレート
 
 ```markdown
-# IdeaRadar - {{date}}
+# IdeaRadar - {{date}} {{slot_label}}
 
-今日のトップアイデア 3〜5 件
+直近 12 時間のトップアイデア 3〜5 件
 
 ---
 
@@ -136,32 +138,32 @@
 ### S2: LLM 構造化 + スコアリング（20〜25h）
 
 **完了基準**:
-- 日次バッチで過去 24 時間の `raw_signals` を処理しアイデア生成
+- 12 時間おきバッチで直近 12 時間の `raw_signals` を処理しアイデア生成
 - Haiku による構造化・カテゴリ分類・類似マージが動作
 - Sonnet による 3 軸スコアリングが動作（Top 10 のみ）
 - Brave Search による競合検索が動作
-- `ideas` テーブルに Top 3〜5 の完全なアイデアが 1 日分格納される
+- `ideas` テーブルに 1 回の実行あたり Top 3〜5 の完全なアイデアが格納される
 - 自己評価: 3 日間運用で「作りたい」と思うアイデアが 1 件以上出る
 
 ### S3: Markdown レポート + Resend 配信（10〜15h）
 
 **完了基準**:
-- 毎朝 JST 8:00 に Top 3〜5 件の Markdown レポートが自分宛メールで届く
-- レポートが `reports/YYYY-MM-DD.md` としてリポジトリに commit される
-- `reports` テーブルに配信ログが記録される
+- JST 朝 8 時・夜 20 時の 1 日 2 回、各 Top 3〜5 件の Markdown レポートが自分宛メールで届く
+- レポートが `reports/YYYY-MM-DD-am.md` / `reports/YYYY-MM-DD-pm.md` としてリポジトリに commit される
+- `reports` テーブルに配信ログが記録される（UNIQUE(date, slot) で 1 日 2 行）
 - 2 週間連続で安定稼働する
 
 ## コスト試算（月額）
 
 | 項目 | コスト |
 |-----|-------|
-| Claude Haiku（構造化、日次） | $1〜3 |
-| Claude Sonnet（スコア精査、日次 Top 10 のみ） | $3〜8 |
-| GitHub Actions（~1,500 分/月） | $0（無料枠 2,000 分内） |
+| Claude Haiku（構造化、12h おき） | $2〜6 |
+| Claude Sonnet（スコア精査、12h おき Top 10 のみ） | $6〜16 |
+| GitHub Actions（~1,200 分/月） | $0（無料枠 2,000 分内） |
 | Supabase Postgres | $0（500MB 以内） |
-| Resend | $0（月 30 通以内） |
-| Brave Search API | $0（月 30 リクエスト以内） |
-| **合計** | **$5〜12** |
+| Resend | $0（月 60 通以内） |
+| Brave Search API | $0（月 60 リクエスト以内） |
+| **合計** | **$10〜24** |
 
 ## 必要な外部アカウント・シークレット
 
