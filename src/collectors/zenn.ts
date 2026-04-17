@@ -1,3 +1,4 @@
+import { fetchWithRetry } from '../lib/fetch-retry.js';
 import type { RawSignalInput } from '../types.js';
 
 const API = 'https://zenn.dev/api/articles?order=latest&count=100';
@@ -26,9 +27,14 @@ interface ZennResponse {
 export async function collectZenn(sinceMinutes: number): Promise<RawSignalInput[]> {
   const sinceMs = Date.now() - sinceMinutes * 60 * 1000;
 
-  const res = await fetch(API, {
-    headers: { 'User-Agent': 'idea-radar/0.1.0' },
-  });
+  const res = await fetchWithRetry(
+    API,
+    { headers: { 'User-Agent': 'idea-radar/0.1.0' } },
+    {
+      onRetry: ({ attempt, error }) =>
+        console.warn(`[zenn] retry ${attempt}:`, error instanceof Error ? error.message : error),
+    },
+  );
   if (!res.ok) {
     throw new Error(`[zenn] HTTP ${res.status}`);
   }
@@ -46,10 +52,13 @@ export async function collectZenn(sinceMinutes: number): Promise<RawSignalInput[
       external_id: String(a.id),
       url: `https://zenn.dev${a.path}`,
       title: a.title,
-      content: `${a.emoji ?? ''} ${a.title}`.trim(),
+      // Zenn API は本文・要約を返さないため null。emoji / title の複製は S2 の LLM 入力を
+      // 汚染するだけなので持たない。emoji は metadata 側に残す。
+      content: null,
       author: a.user?.username ?? null,
       posted_at: postedAt.toISOString(),
       metadata: {
+        emoji: a.emoji ?? null,
         topics: (a.topics ?? []).map((t) => t.display_name ?? t.name).filter(Boolean),
         liked_count: a.liked_count,
         comments_count: a.comments_count,

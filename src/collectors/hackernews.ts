@@ -1,3 +1,4 @@
+import { fetchWithRetry } from '../lib/fetch-retry.js';
 import type { RawSignalInput } from '../types.js';
 
 const BASE = 'https://hacker-news.firebaseio.com/v0';
@@ -23,7 +24,8 @@ interface HNItem {
 
 async function fetchItem(id: number): Promise<HNItem | null> {
   try {
-    const res = await fetch(`${BASE}/item/${id}.json`);
+    // 個別 item は 1 回リトライで十分（1500 件取りに行くため過剰リトライはコスト高）
+    const res = await fetchWithRetry(`${BASE}/item/${id}.json`, undefined, { retries: 1 });
     if (!res.ok) return null;
     return (await res.json()) as HNItem | null;
   } catch {
@@ -34,7 +36,13 @@ async function fetchItem(id: number): Promise<HNItem | null> {
 export async function collectHackerNews(sinceMinutes: number): Promise<RawSignalInput[]> {
   const sinceSec = Math.floor(Date.now() / 1000) - sinceMinutes * 60;
 
-  const idsRes = await fetch(`${BASE}/newstories.json`);
+  const idsRes = await fetchWithRetry(`${BASE}/newstories.json`, undefined, {
+    onRetry: ({ attempt, error }) =>
+      console.warn(
+        `[hn] newstories retry ${attempt}:`,
+        error instanceof Error ? error.message : error,
+      ),
+  });
   if (!idsRes.ok) {
     throw new Error(`[hn] newstories HTTP ${idsRes.status}`);
   }

@@ -1,4 +1,5 @@
 import { XMLParser } from 'fast-xml-parser';
+import { fetchWithRetry } from '../lib/fetch-retry.js';
 import type { RawSignalInput } from '../types.js';
 
 const FEEDS: { url: string; category: string }[] = [
@@ -54,9 +55,17 @@ export async function collectHatena(_sinceMinutes: number): Promise<RawSignalInp
 
   for (const feed of FEEDS) {
     try {
-      const res = await fetch(feed.url, {
-        headers: { 'User-Agent': 'idea-radar/0.1.0' },
-      });
+      const res = await fetchWithRetry(
+        feed.url,
+        { headers: { 'User-Agent': 'idea-radar/0.1.0' } },
+        {
+          onRetry: ({ attempt, error }) =>
+            console.warn(
+              `[hatena] ${feed.url} retry ${attempt}:`,
+              error instanceof Error ? error.message : error,
+            ),
+        },
+      );
       if (!res.ok) {
         console.error(`[hatena] ${feed.url} -> HTTP ${res.status}`);
         continue;
