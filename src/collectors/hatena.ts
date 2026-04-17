@@ -41,7 +41,7 @@ function str(value: unknown): string | null {
 
 // 注意: 他コレクタは `sinceMinutes` で時間窓フィルタをかけるが、はてなブックマークの
 // Hotentry / entrylist の `dc:date` は「記事投稿時刻」であって「hotentry 入り時刻」ではないため、
-// 2h ウィンドウでフィルタすると恒常的に 0 件になる。このコレクタは RSS の全件を返し、
+// 収集ウィンドウ（数時間〜半日）でフィルタすると恒常的に 0 件になる。このコレクタは RSS の全件を返し、
 // DB の UNIQUE(source, external_id) + `ignoreDuplicates` で自然に新規分だけが蓄積される設計。
 // 引数は API 互換のため残す。
 export async function collectHatena(_sinceMinutes: number): Promise<RawSignalInput[]> {
