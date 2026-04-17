@@ -1,5 +1,5 @@
 -- raw_signals: 各ソースから収集した生データ
--- 2時間おきに収集、UNIQUE(source, external_id) で重複除外
+-- 6時間おきに収集、UNIQUE(source, external_id) で重複除外
 
 create extension if not exists "uuid-ossp";
 
