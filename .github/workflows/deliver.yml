@@ -50,6 +50,13 @@ jobs:
         env:
           REPORT_FILE: ${{ steps.deliver.outputs.report_file }}
         run: |
+          # workflow_dispatch を main 以外から起動した際、そのブランチの内容を
+          # 丸ごと main に push してしまう事故を防ぐためのガード。
+          # schedule 実行は default branch が ref になるので常に通る。
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::warning::triggered from ${GITHUB_REF} (not main); skip commit/push"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$REPORT_FILE"
