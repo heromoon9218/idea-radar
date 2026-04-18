@@ -1,5 +1,5 @@
 -- ideas: Haiku 構造化 + Sonnet スコアリング済みアイデア
--- 12h おきに analyze ワークフローが直近 12h の raw_signals から Top 3-5 件を insert する。
+-- 1 日 1 回 analyze ワークフローが直近 12h の raw_signals から Top 3-5 件を insert する。
 -- total_score は 3 軸の合計を自動計算 (generated column)。
 -- delivered_at は S3 の配信時に更新される (NULL = 未配信)。
 

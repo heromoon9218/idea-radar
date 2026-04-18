@@ -1,0 +1,108 @@
+name: deliver
+
+on:
+  schedule:
+    # UTC 23:30 = JST 翌朝 08:30。
+    # analyze.yml は UTC 23:00 開始 / timeout 15min (最長 UTC 23:15 終了) なので、
+    # analyze 完了から deliver 開始まで 15min のマージンを確保する。
+    - cron: '30 23 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: deliver
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # reports/*.md を commit するために必要
+  issues: write     # 失敗時 Issue 起票
+
+jobs:
+  deliver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # rebase retry で origin/main へ巻き戻せるよう full history を取得
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - name: Run deliver
+        id: deliver
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM_EMAIL: ${{ secrets.RESEND_FROM_EMAIL }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+        run: npm run deliver
+
+      - name: Commit report
+        if: success() && steps.deliver.outputs.delivered == 'true'
+        env:
+          REPORT_FILE: ${{ steps.deliver.outputs.report_file }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$REPORT_FILE"
+          if git diff --cached --quiet; then
+            echo "no changes to commit"
+            exit 0
+          fi
+          git commit -m "feat(report): $REPORT_FILE"
+          # push 競合 (main に他 commit が入った直後) 対策に rebase retry
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "push failed (attempt $attempt), rebasing onto origin/main..."
+            git fetch origin main
+            git rebase origin/main
+          done
+          echo "push failed after 3 attempts" >&2
+          exit 1
+
+      - name: Open issue on failure
+        if: failure()
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            const title = `[deliver] workflow failed (run ${context.runId})`;
+            // 直近 24 時間に同種 Issue があればコメント追加で済ませる (Issue 乱立防止)
+            const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+            const existing = await github.rest.issues.listForRepo({
+              owner,
+              repo,
+              state: 'open',
+              labels: 'deliver-failure',
+              since,
+              per_page: 5,
+            });
+            const body = `workflow が失敗しました。\n\nrun: ${runUrl}\ntime: ${new Date().toISOString()}`;
+            if (existing.data.length > 0) {
+              const issue = existing.data[0];
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner,
+                repo,
+                title,
+                body,
+                labels: ['deliver-failure'],
+              });
+            }
