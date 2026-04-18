@@ -2,8 +2,8 @@ name: analyze
 
 on:
   schedule:
-    # UTC 11 時・23 時 = JST 20 時・翌朝 8 時 (S3 配信の直前タイミング)
-    - cron: '0 11,23 * * *'
+    # UTC 23 時 = JST 翌朝 8 時 (1 日 1 回)
+    - cron: '0 23 * * *'
   workflow_dispatch:
 
 concurrency:
