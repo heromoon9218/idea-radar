@@ -1,0 +1,76 @@
+name: analyze
+
+on:
+  schedule:
+    # UTC 11 時・23 時 = JST 20 時・翌朝 8 時 (S3 配信の直前タイミング)
+    - cron: '0 11,23 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: analyze
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - name: Run analyzer
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+        run: npm run analyze
+
+      - name: Open issue on failure
+        if: failure()
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            const title = `[analyze] workflow failed (run ${context.runId})`;
+            // 直近 24 時間に同種 Issue があればコメント追加で済ませる (Issue 乱立防止)
+            const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+            const existing = await github.rest.issues.listForRepo({
+              owner,
+              repo,
+              state: 'open',
+              labels: 'analyze-failure',
+              since,
+              per_page: 5,
+            });
+            const body = `workflow が失敗しました。\n\nrun: ${runUrl}\ntime: ${new Date().toISOString()}`;
+            if (existing.data.length > 0) {
+              const issue = existing.data[0];
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner,
+                repo,
+                title,
+                body,
+                labels: ['analyze-failure'],
+              });
+            }
