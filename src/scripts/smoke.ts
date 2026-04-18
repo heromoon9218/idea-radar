@@ -1,10 +1,12 @@
 // 認証不要なコレクタ / 認証必要な analyze パイプラインのスモークテスト。
 // 使い方:
-//   npx tsx src/scripts/smoke.ts            # コレクタ 3 種を dry-run (認証不要)
-//   npx tsx src/scripts/smoke.ts --analyze  # Haiku / Tavily / Sonnet を 1 件だけ通電確認
-//                                           (要 ANTHROPIC_API_KEY, TAVILY_API_KEY,
-//                                            SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-// analyze モードは DB に書き込まず、LLM と Tavily の結果を stdout に出すだけ。
+//   npx tsx src/scripts/smoke.ts                 # コレクタ 3 種を dry-run (認証不要)
+//   npx tsx src/scripts/smoke.ts --analyze       # Haiku / Tavily / Sonnet を 1 件だけ通電確認
+//                                                (要 ANTHROPIC_API_KEY, TAVILY_API_KEY,
+//                                                 SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+//   npx tsx src/scripts/smoke.ts --deliver-dry   # 未配信 ideas から Markdown を生成して stdout。
+//                                                  メール送信 / DB 書き込み / ファイル出力はしない
+//                                                  (要 SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 import 'dotenv/config';
 import { collectHatena } from '../collectors/hatena.js';
@@ -19,6 +21,13 @@ import {
   type HaikuSignalInput,
   type RawSignalInput,
 } from '../types.js';
+import {
+  attachSourceLinks,
+  fetchUndeliveredTopIdeas,
+} from '../report/select-ideas.js';
+import { renderMarkdown } from '../report/render-markdown.js';
+import { markdownToHtml } from '../report/markdown-to-html.js';
+import { buildSubject, resolveSlotBase } from '../report/slot.js';
 
 const WINDOW_MIN = 1440; // 過去24h
 const ANALYZE_SAMPLE_SIZE = 5;
@@ -113,13 +122,40 @@ async function smokeAnalyze(): Promise<void> {
   );
 }
 
-async function main(): Promise<void> {
-  const mode = process.argv.includes('--analyze') ? 'analyze' : 'collectors';
-  if (mode === 'analyze') {
-    await smokeAnalyze();
-  } else {
-    await smokeCollectors();
+async function smokeDeliverDry(): Promise<void> {
+  const ideas = await fetchUndeliveredTopIdeas();
+  console.log(`[smoke-deliver] undelivered=${ideas.length}`);
+  if (ideas.length === 0) {
+    console.log('[smoke-deliver] 0 件 (通常運用なら skip)');
+    return;
   }
+
+  const enriched = await attachSourceLinks(ideas);
+  const base = resolveSlotBase(new Date());
+  const subject = buildSubject(base, enriched.length);
+  const markdown = renderMarkdown(enriched, { date: base.date, slotLabel: base.slotLabel });
+  const html = markdownToHtml(markdown, subject);
+
+  console.log('=== subject ===');
+  console.log(subject);
+  console.log('=== filename (would write) ===');
+  console.log(base.filename);
+  console.log('=== markdown ===');
+  console.log(markdown);
+  console.log('=== html (first 1200 chars) ===');
+  console.log(html.slice(0, 1200));
+}
+
+async function main(): Promise<void> {
+  if (process.argv.includes('--analyze')) {
+    await smokeAnalyze();
+    return;
+  }
+  if (process.argv.includes('--deliver-dry')) {
+    await smokeDeliverDry();
+    return;
+  }
+  await smokeCollectors();
 }
 
 main().catch((err) => {
