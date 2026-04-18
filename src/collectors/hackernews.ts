@@ -1,5 +1,5 @@
 import { fetchWithRetry } from '../lib/fetch-retry.js';
-import type { RawSignalInput } from '../types.js';
+import type { HnStoryType, RawSignalInput } from '../types.js';
 
 const BASE = 'https://hacker-news.firebaseio.com/v0';
 // HN の新規投稿は 1h あたり 40〜100 件なので、370 分ウィンドウをカバーするには最大 600 件超。
@@ -7,6 +7,19 @@ const BASE = 'https://hacker-news.firebaseio.com/v0';
 // 実コストは通常走行時ほぼ変わらない。
 const MAX_IDS = 1500;
 const CONCURRENCY = 10;
+
+const HN_TITLE_PREFIX_RE = /^\s*(show|ask|launch|tell)\s+hn\s*:/i;
+
+export function classifyHnTitle(title: string): HnStoryType {
+  const m = HN_TITLE_PREFIX_RE.exec(title);
+  if (!m || !m[1]) return 'normal';
+  return m[1].toLowerCase() as HnStoryType;
+}
+
+export interface CollectHackerNewsOptions {
+  // 指定した story_type のみ収集する。未指定なら全件（タグ付けのみ）。
+  storyTypes?: HnStoryType[];
+}
 
 interface HNItem {
   id: number;
@@ -33,8 +46,12 @@ async function fetchItem(id: number): Promise<HNItem | null> {
   }
 }
 
-export async function collectHackerNews(sinceMinutes: number): Promise<RawSignalInput[]> {
+export async function collectHackerNews(
+  sinceMinutes: number,
+  options: CollectHackerNewsOptions = {},
+): Promise<RawSignalInput[]> {
   const sinceSec = Math.floor(Date.now() / 1000) - sinceMinutes * 60;
+  const typeFilter = options.storyTypes ? new Set(options.storyTypes) : null;
 
   const idsRes = await fetchWithRetry(`${BASE}/newstories.json`, undefined, {
     onRetry: ({ attempt, error }) =>
@@ -50,6 +67,13 @@ export async function collectHackerNews(sinceMinutes: number): Promise<RawSignal
   const targetIds = allIds.slice(0, MAX_IDS);
 
   const results: RawSignalInput[] = [];
+  const typeCounts: Record<HnStoryType, number> = {
+    show: 0,
+    ask: 0,
+    launch: 0,
+    tell: 0,
+    normal: 0,
+  };
   for (let i = 0; i < targetIds.length; i += CONCURRENCY) {
     const batch = targetIds.slice(i, i + CONCURRENCY);
     const items = await Promise.all(batch.map(fetchItem));
@@ -61,6 +85,10 @@ export async function collectHackerNews(sinceMinutes: number): Promise<RawSignal
       if (!item.title || !item.time) continue;
       if (item.time < oldestInBatch) oldestInBatch = item.time;
       if (item.time < sinceSec) continue;
+
+      const storyType = classifyHnTitle(item.title);
+      if (typeFilter && !typeFilter.has(storyType)) continue;
+      typeCounts[storyType] += 1;
 
       results.push({
         source: 'hackernews',
@@ -74,12 +102,17 @@ export async function collectHackerNews(sinceMinutes: number): Promise<RawSignal
           score: item.score ?? null,
           descendants: item.descendants ?? null,
           hn_url: `https://news.ycombinator.com/item?id=${item.id}`,
+          story_type: storyType,
         },
       });
     }
 
     if (oldestInBatch < sinceSec) break;
   }
+
+  console.log(
+    `[hn] story_type breakdown show=${typeCounts.show} ask=${typeCounts.ask} launch=${typeCounts.launch} tell=${typeCounts.tell} normal=${typeCounts.normal}`,
+  );
 
   return results;
 }

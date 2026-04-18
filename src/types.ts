@@ -30,6 +30,11 @@ export const IdeaCategorySchema = z.enum([
 ]);
 export type IdeaCategory = z.infer<typeof IdeaCategorySchema>;
 
+// HN タイトルの慣用プリフィックス分類。
+// Show/Launch/Ask HN は個人開発ネタの「金鉱」なので、Haiku 側で優先度を上げる用途に使う。
+export const HnStoryTypeSchema = z.enum(['show', 'ask', 'launch', 'tell', 'normal']);
+export type HnStoryType = z.infer<typeof HnStoryTypeSchema>;
+
 // Haiku への入力 1 件ぶん (raw_signals から必要列だけ抜き出したもの)
 export const HaikuSignalInputSchema = z.object({
   id: z.string().uuid(),
@@ -37,6 +42,9 @@ export const HaikuSignalInputSchema = z.object({
   title: z.string(),
   content: z.string().nullable(),
   url: z.string().url(),
+  // HN のみ: タイトル先頭の Show/Ask/Launch/Tell HN 分類。
+  // それ以外のソースでは undefined。
+  hn_story_type: HnStoryTypeSchema.optional(),
 });
 export type HaikuSignalInput = z.infer<typeof HaikuSignalInputSchema>;
 
