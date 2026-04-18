@@ -6,8 +6,8 @@ import { collectHackerNews } from './collectors/hackernews.js';
 import { RawSignalInputSchema } from './types.js';
 import type { RawSignalInput, SourceType } from './types.js';
 
-// cron は 6 時間おき。取りこぼし防止のため 10 分バッファを入れて 370 分ウィンドウで取得。
-const WINDOW_MINUTES = 370;
+// cron は 1 日 1 回 (JST 7 時)。取りこぼし防止のため 10 分バッファを入れて 1450 分ウィンドウで取得。
+const WINDOW_MINUTES = 1450;
 
 type CollectorFn = () => Promise<RawSignalInput[]>;
 
