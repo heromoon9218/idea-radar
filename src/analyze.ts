@@ -5,6 +5,7 @@ import { scoreIdea } from './analyzers/sonnet.js';
 import { tavilySearch, type TavilySearchResult } from './lib/tavily.js';
 import {
   HaikuSignalInputSchema,
+  HnStoryTypeSchema,
   type HaikuIdeaCandidate,
   type IdeaCategory,
   type SonnetScoredIdea,
@@ -41,13 +42,14 @@ interface SignalRow {
   title: string;
   content: string | null;
   url: string;
+  metadata: Record<string, unknown> | null;
 }
 
 async function fetchUnprocessedSignals(): Promise<SignalRow[]> {
   const since = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString();
   const { data, error } = await supabase
     .from('raw_signals')
-    .select('id, source, title, content, url')
+    .select('id, source, title, content, url, metadata')
     .eq('processed', false)
     .gte('collected_at', since)
     .order('collected_at', { ascending: false })
@@ -57,11 +59,23 @@ async function fetchUnprocessedSignals(): Promise<SignalRow[]> {
 }
 
 // SignalRow → Haiku 入力形式 (zod でバリデートしてから配列化)。
+// HN の metadata.story_type は Haiku プロンプトで参照させるので hn_story_type に昇格。
 // 異常データはログに出してスキップ。
 function toHaikuInputs(rows: SignalRow[]): ReturnType<typeof HaikuSignalInputSchema.parse>[] {
   const out: ReturnType<typeof HaikuSignalInputSchema.parse>[] = [];
   for (const r of rows) {
-    const parsed = HaikuSignalInputSchema.safeParse(r);
+    const enriched: Record<string, unknown> = {
+      id: r.id,
+      source: r.source,
+      title: r.title,
+      content: r.content,
+      url: r.url,
+    };
+    if (r.source === 'hackernews' && r.metadata) {
+      const parsed = HnStoryTypeSchema.safeParse(r.metadata.story_type);
+      if (parsed.success) enriched.hn_story_type = parsed.data;
+    }
+    const parsed = HaikuSignalInputSchema.safeParse(enriched);
     if (!parsed.success) {
       console.warn(`[analyze] drop invalid signal ${r.id}: ${parsed.error.message}`);
       continue;
