@@ -24,7 +24,7 @@
   - Claude Haiku: 構造化（12h おき、大量処理）
   - Claude Sonnet: スコア精査（12h おき、少量のみ）
 - **メール配信**: Resend（無料枠 100 通/日）
-- **競合検索**: Brave Search API（無料枠 2,000 req/月）
+- **競合検索**: Tavily Search API（無料枠 1,000 req/月 / Brave は 2026-02 に Free 廃止のため乗り換え）
 
 ## データソース（全て無料 API / RSS）
 
@@ -89,7 +89,7 @@
 - 直近 12 時間の `raw_signals` から未処理分を Haiku に投げる
 - Haiku で: 痛み抽出 → アイデア化 → カテゴリ分類 → 類似マージ
 - 候補アイデア Top 10 を Sonnet に渡して 3 軸スコア精査
-- Brave Search で類似サービス検索 → `competitors` に格納
+- Tavily Search で類似サービス検索 → `competitors` に格納
 - `ideas` テーブルに格納
 
 ### 配信層（S3 で実装）
@@ -142,7 +142,7 @@
 - 12 時間おきバッチで直近 12 時間の `raw_signals` を処理しアイデア生成
 - Haiku による構造化・カテゴリ分類・類似マージが動作
 - Sonnet による 3 軸スコアリングが動作（Top 10 のみ）
-- Brave Search による競合検索が動作
+- Tavily Search による競合検索が動作
 - `ideas` テーブルに 1 回の実行あたり Top 3〜5 の完全なアイデアが格納される
 - 自己評価: 3 日間運用で「作りたい」と思うアイデアが 1 件以上出る
 
@@ -163,7 +163,7 @@
 | GitHub Actions（~1,200 分/月） | $0（無料枠 2,000 分内） |
 | Supabase Postgres | $0（500MB 以内） |
 | Resend | $0（月 60 通以内） |
-| Brave Search API | $0（月 60 リクエスト以内） |
+| Tavily Search API | $0（月 600 リクエスト想定、無料枠 1,000 req 内） |
 | **合計** | **$10〜24** |
 
 ## 必要な外部アカウント・シークレット
@@ -178,7 +178,7 @@ GitHub Actions の Secrets に登録する環境変数:
 | `RESEND_API_KEY` | メール配信 |
 | `RESEND_FROM_EMAIL` | 送信元アドレス |
 | `RECIPIENT_EMAIL` | 自分のメールアドレス |
-| `BRAVE_SEARCH_API_KEY` | 競合検索 |
+| `TAVILY_API_KEY` | 競合検索 |
 
 ## 将来の拡張（今回スコープ外）
 
