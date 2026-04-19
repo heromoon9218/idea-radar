@@ -2,8 +2,9 @@
 //   1. raw_signals (未処理 / 直近 24h) を取得
 //   2. Haiku クラスタリング: aggregator_bundles (≥3) / combinator_pairs (≥2) / gap_candidates (≥1)
 //   3. Sonnet × 3 役割並列: 集約者 / 結合者 / 隙間発見者 がそれぞれアイデアを起草
-//   4. 合流して raw_score DESC で Top 10
-//   5. Top 10 を Tavily 検索 + Sonnet 3 軸スコアリング
+//      (各役割内は DRAFT_CONCURRENCY で同時実行数を制限)
+//   4. 合流 → 役割間で title+category 一致するアイデアを dedup
+//   5. raw_score DESC で Top 10 → Tavily 検索 + Sonnet 3 軸スコアリング
 //   6. Top 5 を ideas に insert、signals を processed=true 更新
 //
 // 3 役割アプローチの意図: 「ハッカソンで 3 人が集まってブレストする」発想で
@@ -17,6 +18,7 @@ import { draftFromAggregatorBundle } from './analyzers/sonnet-aggregator.js';
 import { draftFromCombinatorPair } from './analyzers/sonnet-combinator.js';
 import { draftFromGapCandidate } from './analyzers/sonnet-gap-finder.js';
 import { scoreIdea } from './analyzers/sonnet.js';
+import { mapWithLimit } from './lib/concurrency.js';
 import { tavilySearch, type TavilySearchResult } from './lib/tavily.js';
 import {
   HaikuSignalInputSchema,
@@ -33,6 +35,14 @@ const WINDOW_HOURS = 24;
 const MAX_SIGNALS_PER_BATCH = 500;
 const SONNET_TOP_N = 10;
 const INSERT_TOP_N = 5;
+
+// Sonnet drafter の同時実行数上限 (役割内)。
+// 3 役割を Promise.all で並列に走らせるので、理論最大は 3 × DRAFT_CONCURRENCY 件。
+// 値の選定理由:
+//   - 小さすぎると 1 回の analyze が遅くなる (バンドル数 20 なら逐次で 20 × ~5s = 100s)
+//   - 大きすぎると Anthropic API のレート制限 / prompt cache のヒット率低下
+//   - 3 役割 × 3 = 9 並列なら各役割で先頭 1-2 件が cache を書き込み後続が読み取れる
+const DRAFT_CONCURRENCY = 3;
 
 // Tavily の無料プランで明示的な per-second レート制限は公表されていないが、
 // 10 req/バッチを数秒間隔で叩く保険として 300ms の最小間隔を置く。
@@ -130,13 +140,14 @@ async function draftByThreeRoles(
     }
   };
 
-  // 各入力が独立なので内部も Promise.allSettled で 1 個コケてもロール全体は落とさない
+  // 各入力が独立なので mapWithLimit で concurrency を絞りつつ、allSettled 相当の
+  // semantics で 1 個コケてもロール全体は落とさない。
   const safeMap = async <I>(
     items: I[],
     fn: (item: I) => Promise<HaikuIdeaCandidate[]>,
     label: string,
   ): Promise<HaikuIdeaCandidate[][]> => {
-    const results = await Promise.allSettled(items.map(fn));
+    const results = await mapWithLimit(items, DRAFT_CONCURRENCY, fn);
     const out: HaikuIdeaCandidate[][] = [];
     for (const r of results) {
       if (r.status === 'fulfilled') out.push(r.value);
@@ -174,6 +185,31 @@ async function draftByThreeRoles(
   ]);
 
   return [...aggregator, ...combinator, ...gapFinder];
+}
+
+// 役割間で title + category が完全一致するアイデアをマージ。
+// 同じシグナルが aggregator と gap に跨って採用されるケースで、Sonnet が
+// 似たアイデアを 2 本出すのを吸収する。raw_score が高い方を残し、
+// source_signal_ids は両者の和集合にする (片方だけが知っている ID を取りこぼさない)。
+// 同点なら先に出現した方の role を残す (安定ソート性)。
+function dedupeCandidates(
+  candidates: RoleTaggedCandidate[],
+): RoleTaggedCandidate[] {
+  const byKey = new Map<string, RoleTaggedCandidate>();
+  for (const c of candidates) {
+    const key = `${c.category}|${c.title.trim().toLowerCase()}`;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, c);
+      continue;
+    }
+    const mergedIds = Array.from(
+      new Set([...existing.source_signal_ids, ...c.source_signal_ids]),
+    );
+    const winner = c.raw_score > existing.raw_score ? c : existing;
+    byKey.set(key, { ...winner, source_signal_ids: mergedIds });
+  }
+  return Array.from(byKey.values());
 }
 
 async function scoreTopCandidates(
@@ -274,19 +310,26 @@ async function main(): Promise<void> {
   }
 
   // 2) Sonnet × 3 役割並列でアイデア起草
-  const candidates = await draftByThreeRoles(cluster, signals);
-  console.log(`[analyze] total_drafted=${candidates.length}`);
-  if (candidates.length === 0) {
+  const drafted = await draftByThreeRoles(cluster, signals);
+  console.log(`[analyze] total_drafted=${drafted.length}`);
+  if (drafted.length === 0) {
     await markProcessed(signals.map((s) => s.id));
     console.log('[analyze] no drafts, signals marked processed');
     return;
   }
 
-  // 3) Top 10 を Tavily + Sonnet 3 軸スコアリング
+  // 3) 役割間で title+category 一致する重複を dedup
+  const candidates = dedupeCandidates(drafted);
+  const removed = drafted.length - candidates.length;
+  if (removed > 0) {
+    console.log(`[analyze] after_dedup=${candidates.length} removed=${removed}`);
+  }
+
+  // 4) Top 10 を Tavily + Sonnet 3 軸スコアリング
   const scored = await scoreTopCandidates(candidates);
   console.log(`[analyze] sonnet_scored=${scored.length}`);
 
-  // 4) 合計スコアで Top 5
+  // 5) 合計スコアで Top 5
   const finals = [...scored]
     .sort((a, b) => sum3(b) - sum3(a))
     .slice(0, INSERT_TOP_N);

@@ -65,15 +65,16 @@ export async function callParsed<Schema extends ZodType>(
   const ms = Date.now() - started;
 
   const usage = msg.usage;
-  // cache 統計は cacheSystem=true のときだけ追記。SDK 版によって型定義が未同期の
-  // 可能性があるため unknown 経由で取り出す (cache_read_input_tokens / cache_creation_input_tokens)
+  // cache 統計は cacheSystem=true のときは常に出す (0 でも出す)。
+  // 「書き込みすら 0」なのか「そもそも cacheSystem=false」なのかをログで区別できるようにして、
+  // 本番 1-2 日稼働後に caching が効いているか判断する材料にする。
+  // SDK 版によって型定義が未同期の可能性があるため unknown 経由で取り出す。
   const anyUsage = usage as unknown as Record<string, number | undefined>;
   const cacheRead = anyUsage.cache_read_input_tokens ?? 0;
   const cacheWrite = anyUsage.cache_creation_input_tokens ?? 0;
-  const cacheSuffix =
-    args.cacheSystem && (cacheRead > 0 || cacheWrite > 0)
-      ? ` cached_read=${cacheRead} cached_write=${cacheWrite}`
-      : '';
+  const cacheSuffix = args.cacheSystem
+    ? ` cached_read=${cacheRead} cached_write=${cacheWrite}`
+    : '';
   console.log(
     `${args.logPrefix} model=${args.model} in=${usage.input_tokens} out=${usage.output_tokens}${cacheSuffix} ${ms}ms`,
   );
