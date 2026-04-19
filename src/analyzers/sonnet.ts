@@ -66,7 +66,9 @@ export async function scoreIdea(
     user: buildUserPrompt({ candidate, searchResults }),
     schema: SonnetScoredIdeaSchema,
     maxTokens: SONNET_MAX_TOKENS,
-    logPrefix: `[sonnet ${candidate.title.slice(0, 40)}]`,
+    logPrefix: `[sonnet score "${candidate.title.slice(0, 40)}"]`,
+    // 同 system で Top 10 を連続スコアリングするので cache を効かせる
+    cacheSystem: true,
   });
 
   // LLM が source_signal_ids を勝手に削ることがあるため、Haiku 側の ID を信頼して上書き

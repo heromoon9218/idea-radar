@@ -29,7 +29,7 @@ export function renderMarkdown(ideas: IdeaWithSources[], ctx: RenderContext): st
   const lines: string[] = [];
   lines.push(`# IdeaRadar - ${ctx.date} ${ctx.slotLabel}`);
   lines.push('');
-  lines.push(`直近 12 時間のトップアイデア ${ideas.length} 件`);
+  lines.push(`直近 24 時間のトップアイデア ${ideas.length} 件`);
   lines.push('');
   lines.push('---');
   lines.push('');

@@ -48,7 +48,50 @@ export const HaikuSignalInputSchema = z.object({
 });
 export type HaikuSignalInput = z.infer<typeof HaikuSignalInputSchema>;
 
-// Haiku が返すアイデア候補 (同じ痛みのシグナルは 1 件にマージ済み)
+// ---- Haiku クラスタリング ----
+// Haiku はシグナルを 3 種類のバンドル/候補に分類するだけで、アイデア文は書かない。
+// 各バンドルは後段の Sonnet × 3 役割 (集約者 / 結合者 / 隙間発見者) に渡す。
+
+// 集約者用: 同じ痛みを指す 3+ signals のクラスタ
+export const AggregatorBundleSchema = z.object({
+  theme: z.string().min(1), // クラスタの主題を短く (例: "Zennの記事管理で似たファイルが多すぎる")
+  signal_ids: z.array(z.string().uuid()).min(3),
+});
+export type AggregatorBundle = z.infer<typeof AggregatorBundleSchema>;
+
+// 結合者用: 痛み + 技術/情報 の組み合わせ候補。最低 2 signals (痛み 1 + 情報 1)
+// pain_signal_ids (痛みを含むシグナル) と info_signal_ids (技術/情報を含むシグナル) に分離。
+// 合計 signal 数が 2 未満の候補は Haiku 側で出力しないよう指示する。
+export const CombinatorPairSchema = z.object({
+  angle: z.string().min(1), // 掛け合わせの観点 (例: "新規OSS × 既存の面倒な作業")
+  pain_signal_ids: z.array(z.string().uuid()).min(1),
+  info_signal_ids: z.array(z.string().uuid()).min(1),
+});
+export type CombinatorPair = z.infer<typeof CombinatorPairSchema>;
+
+// 隙間発見者用: 既存プロダクト告知 / 有料サービス言及 / 隣接ドメイン移植のネタ元。
+// 1 signal からでも成立するケースが多い。
+export const GapCandidateSchema = z.object({
+  angle: z.enum(['launch_hn', 'show_hn', 'paid_service_mention', 'niche_transfer', 'other']),
+  hint: z.string().min(1), // どの方向で隙間を狙うかの短文ヒント
+  signal_ids: z.array(z.string().uuid()).min(1),
+});
+export type GapCandidate = z.infer<typeof GapCandidateSchema>;
+
+export const HaikuClusterOutputSchema = z.object({
+  aggregator_bundles: z.array(AggregatorBundleSchema),
+  combinator_pairs: z.array(CombinatorPairSchema),
+  gap_candidates: z.array(GapCandidateSchema),
+});
+export type HaikuClusterOutput = z.infer<typeof HaikuClusterOutputSchema>;
+
+// ---- Sonnet × 3 役割のアイデア起草 ----
+// 各役割は共通スキーマ (HaikuIdeaCandidate と互換) でアイデア候補を返す。
+// role はどの役割が起草したかを analyze 側で観測ログに出すための注釈。
+
+export const IdeaRoleSchema = z.enum(['aggregator', 'combinator', 'gap_finder']);
+export type IdeaRole = z.infer<typeof IdeaRoleSchema>;
+
 export const HaikuIdeaCandidateSchema = z.object({
   title: z.string().min(1),
   pain_summary: z.string().min(1),
@@ -59,10 +102,15 @@ export const HaikuIdeaCandidateSchema = z.object({
 });
 export type HaikuIdeaCandidate = z.infer<typeof HaikuIdeaCandidateSchema>;
 
-export const HaikuOutputSchema = z.object({
+export const RoleIdeaOutputSchema = z.object({
   candidates: z.array(HaikuIdeaCandidateSchema),
 });
-export type HaikuOutput = z.infer<typeof HaikuOutputSchema>;
+export type RoleIdeaOutput = z.infer<typeof RoleIdeaOutputSchema>;
+
+// 3 役割の出力をマージした中間表現 (analyze 側で使う)
+export interface RoleTaggedCandidate extends HaikuIdeaCandidate {
+  role: IdeaRole;
+}
 
 // Tavily / Sonnet のあいだで受け渡す競合 1 件
 export const CompetitorSchema = z.object({

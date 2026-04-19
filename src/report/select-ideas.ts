@@ -1,11 +1,11 @@
 // 未配信 ideas と紐づく raw_signals (URL) を取得する。
-// ideas.delivered_at IS NULL + 直近 12h + total_score DESC で Top 5 まで。
+// ideas.delivered_at IS NULL + 直近 24h + total_score DESC で Top 5 まで。
 
 import { z } from 'zod';
 import { supabase } from '../db/supabase.js';
 import { CompetitorSchema, IdeaCategorySchema, SourceTypeSchema, type Competitor } from '../types.js';
 
-const WINDOW_HOURS = 12;
+const WINDOW_HOURS = 24;
 const TOP_N = 5;
 // reports 側で直近何日の idea_ids を「配信済み」として扱うか。
 // markIdeasDelivered が失敗して delivered_at が NULL のまま残ったケースで、
