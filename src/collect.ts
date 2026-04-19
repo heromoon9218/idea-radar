@@ -8,6 +8,11 @@ import type { RawSignalInput, SourceType } from './types.js';
 
 // cron は 1 日 1 回 (JST 7 時)。取りこぼし防止のため 10 分バッファを入れて 1450 分ウィンドウで取得。
 const WINDOW_MINUTES = 1450;
+// HN normal (Show/Ask/Launch/Tell プリフィックスなしの通常投稿) は 24h で 400+ 件発生し
+// score 1-2 で埋もれる記事が大半。score 上位 N 件のみ採用してノイズを削る。
+// hatena (~38) + zenn (~100) + HN 非 normal (~75) + HN normal top 100 = 約 313 件で、
+// analyze 側の MAX_SIGNALS_PER_BATCH=500 に収まり取りこぼしが無くなる。
+const HN_NORMAL_TOP_BY_SCORE = 100;
 
 type CollectorFn = () => Promise<RawSignalInput[]>;
 
@@ -44,7 +49,11 @@ async function main(): Promise<void> {
   const collectors: Array<[SourceType, CollectorFn]> = [
     ['hatena', () => collectHatena(WINDOW_MINUTES)],
     ['zenn', () => collectZenn(WINDOW_MINUTES)],
-    ['hackernews', () => collectHackerNews(WINDOW_MINUTES)],
+    [
+      'hackernews',
+      () =>
+        collectHackerNews(WINDOW_MINUTES, { normalTopByScore: HN_NORMAL_TOP_BY_SCORE }),
+    ],
   ];
 
   const outcomes = await Promise.all(
