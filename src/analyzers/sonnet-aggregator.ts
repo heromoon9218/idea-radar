@@ -1,0 +1,84 @@
+// Sonnet 「集約者」役: 同じ痛みを指す 3+ signals のクラスタから堅実に裏取れた痛みを解決するアイデアを起草する。
+// ハッカソンでいう「複数人の意見を整理して本質を抜き出すタイプ」のメンバー。
+
+import { callParsed } from '../lib/anthropic.js';
+import {
+  RoleIdeaOutputSchema,
+  type AggregatorBundle,
+  type HaikuIdeaCandidate,
+  type HaikuSignalInput,
+} from '../types.js';
+
+export const SONNET_MODEL = 'claude-sonnet-4-6';
+const SONNET_MAX_TOKENS = 3072;
+
+const AGGREGATOR_SYSTEM = `あなたは個人開発アイデア発掘ハッカソンの「集約者」です。
+3 人のブレストメンバーのうち、あなたの役割は 「複数シグナルで裏取れた痛み」 を堅実にアイデア化することです。
+
+# あなたの思考様式
+
+- バンドル内の複数シグナルに共通する「本質的な痛み」は何かを最初に言語化する
+- その痛みに対し、個人開発者が 1-3 ヶ月で MVP を出せる規模のアイデアを 1-2 個 提案する
+- 複数人が同じ痛みを訴えていることを武器にする — 「市場が確実に存在する」前提で書く
+- pain_summary は「誰が・いつ・どんな状況で・なぜ困っているか」を 2-3 文で具体的に
+- idea_description は「何を作るか + 差別化ポイント + 最小構成」を 3-4 文で。機能ありきではなく痛みの解消経路で書く
+- category は dev-tool / productivity / saas / ai / other のいずれか
+
+# 出力条件
+
+- 1 バンドルにつき 1 個 が基本。特に強い場合のみ 2 個まで
+- raw_score (1-5) = 「個人開発候補としての筋の良さ」。5 = 今すぐ作りたい、3 = 条件次第、1 = 微妙
+- source_signal_ids: バンドルの signal_ids を全て含める (削らない)
+- 痛みが弱い・具体性を欠く場合は candidates: [] を返してよい
+
+# 評価軸 (raw_score に反映)
+
+- 非エンジニアまたは B2B 小口が月 $5-20 払う可能性が見える痛みか
+- レッドオーシャンではなく、個人開発者が入り込める隙間があるか
+- 既に金が動いているドメインの未充足ポイントか
+`;
+
+interface InputArgs {
+  bundle: AggregatorBundle;
+  signalsById: Map<string, HaikuSignalInput>;
+}
+
+function buildUserPrompt({ bundle, signalsById }: InputArgs): string {
+  const signals = bundle.signal_ids
+    .map((id) => signalsById.get(id))
+    .filter((s): s is HaikuSignalInput => s !== undefined);
+
+  return [
+    '# クラスタ情報',
+    `テーマ: ${bundle.theme}`,
+    `シグナル数: ${signals.length}`,
+    '',
+    '# 所属シグナル',
+    JSON.stringify(signals, null, 2),
+    '',
+    'このクラスタの共通痛みを抜き出し、個人開発向けのアイデアを 1-2 個起草してください。',
+    `source_signal_ids は以下の ${bundle.signal_ids.length} 個を全て含めてください:`,
+    JSON.stringify(bundle.signal_ids),
+  ].join('\n');
+}
+
+export async function draftFromAggregatorBundle(
+  args: InputArgs,
+): Promise<HaikuIdeaCandidate[]> {
+  const parsed = await callParsed({
+    model: SONNET_MODEL,
+    system: AGGREGATOR_SYSTEM,
+    user: buildUserPrompt(args),
+    schema: RoleIdeaOutputSchema,
+    maxTokens: SONNET_MAX_TOKENS,
+    logPrefix: `[sonnet aggregator theme="${args.bundle.theme.slice(0, 30)}"]`,
+    // 同役割内で複数バンドル処理するときに system が使い回されるので cache を効かせる
+    cacheSystem: true,
+  });
+
+  // source_signal_ids は元の bundle.signal_ids で上書き保証
+  return parsed.candidates.map((c) => ({
+    ...c,
+    source_signal_ids: args.bundle.signal_ids,
+  }));
+}

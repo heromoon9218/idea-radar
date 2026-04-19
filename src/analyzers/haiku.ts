@@ -1,133 +1,185 @@
-// Haiku で raw_signals を個人開発アイデア候補に構造化する。
-// - signals を chunk (40件) に分割し、各 chunk で submit_candidates を parse
-// - 同じ痛みを指すシグナルは 1 候補にマージ (LLM 判定、chunk 内)
-// - chunk 間の重複は後段で title+category の exact match で軽く dedup
-// - 無効な source_signal_ids (入力にない UUID) は除外
+// Haiku はアイデアを書かない。raw_signals を 3 種類のバンドルに分類するクラスタリング役。
+// 後段で Sonnet × 3 役割 (集約者 / 結合者 / 隙間発見者) が各バンドルからアイデアを起草する。
+//
+// バンドル種別:
+// - aggregator_bundles: 同じ痛みを指す 3+ signals のクラスタ
+// - combinator_pairs:   痛み × 技術/情報 の掛け合わせ候補 (2+ signals 合計)
+// - gap_candidates:     既存プロダクト告知 / 有料サービス言及 / 隣接ドメイン移植のネタ元 (1+ signals)
+//
+// 実装方針:
+// - 全 signals を 1 回の Haiku 呼び出しに渡す (チャンク分割しない)。クラスタリング判定は
+//   全体を俯瞰しないと精度が出ないため。signals が HAIKU_MAX_SIGNALS を超えたら上位の
+//   新しい signal 優先でトリミングする (fetchUnprocessedSignals が collected_at DESC ソート済み)。
+// - 無効な signal_id は Haiku 出力側から除外する。
 
 import { callParsed } from '../lib/anthropic.js';
 import {
-  HaikuOutputSchema,
-  type HaikuIdeaCandidate,
+  HaikuClusterOutputSchema,
+  type HaikuClusterOutput,
   type HaikuSignalInput,
+  type AggregatorBundle,
+  type CombinatorPair,
+  type GapCandidate,
 } from '../types.js';
 
 export const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
-export const HAIKU_CHUNK_SIZE = 40;
-// 候補は 1 chunk あたり最大 10 件程度を想定。余裕を持って 4096 token。
-const HAIKU_MAX_TOKENS = 4096;
+// 1 回で受け渡しできる上限。現状の 300-500 signals/日なら 1 回で収まる想定。
+export const HAIKU_MAX_SIGNALS = 500;
+// 出力は 3 種類の配列で、合計 30-60 個程度を想定。余裕を持って 8192 token。
+const HAIKU_MAX_TOKENS = 8192;
 
-const HAIKU_SYSTEM = `あなたは個人開発者向けのアイデア発掘アシスタントです。
-与えられたシグナル（ブログ・技術投稿・Ask HN など）から、
-エンジニアの「痛み」「不満」「ニーズ」を抽出し、個人開発で実現可能なアイデアに変換します。
+const HAIKU_SYSTEM = `あなたは個人開発者向けアイデア発掘パイプラインのクラスタリング担当です。
+与えられたシグナル (ブログ・技術投稿・Ask/Show/Launch HN など) を以下 3 種類に分類します。
+アイデア文は書きません。後段の 3 役割 (集約者 / 結合者 / 隙間発見者) が各バンドルからアイデアを起草します。
 
-判断基準:
-- 個人開発者が 1〜3 ヶ月で MVP を出せる規模であること
-- 「自分も使いたい」と思える具体性があること
-- category は dev-tool / productivity / saas / ai / other のいずれか
-- 痛みが明確でないシグナル (単なるニュース紹介、リリースノート告知、自慢話) は候補から除外してよい
-- 複数のシグナルが同じ痛みを指すなら 1 つにマージし、source_signal_ids に全ての UUID を含める
-- raw_score (1-5) は「個人開発候補としての筋の良さ」の粗評価。5 = 今すぐ作りたい、1 = 痛みが弱い
-- 候補が 0 件のときは candidates: [] を返す
-- pain_summary / idea_description は日本語で 1〜3 文に収める
+# 3 種類のバンドル
 
-HN 固有の hn_story_type ヒント (HN シグナルのみに付与される):
-- "ask"    = Ask HN。具体的な質問・相談で痛みが露出している確率が高い。最優先で精読する
-- "show"   = Show HN。自作プロダクト発表。模倣元/隣接ドメインへの移植ネタとして価値が高い
-- "launch" = Launch HN (YC バッチのローンチ告知)。需要検証が済んだ事例として筋が良い
-- "tell"   = Tell HN。知見共有。中程度
-- "normal" = 通常投稿。ニュース紹介や自慢話が多くノイズ比が高いので、痛みが明確な場合以外は除外寄り
-- ask / show / launch は raw_score を +1 してよい (上限 5)。ただし痛みが弱い・単なる告知のみの場合は上乗せしない`;
+## aggregator_bundles (集約者向け)
+- 同じ痛みを複数のシグナルが訴えている場合、それらをまとめる
+- 1 バンドルあたり signal_ids は 3 個以上 必須 (3 件未満は作らない)
+- theme はそのクラスタの痛みを 1 行で説明する日本語の短文
+- 「複数人が同じ困りごとを言っている」強いエビデンスだけを採用。1-2 件しか裏取れないなら他の 2 種類に回すか捨てる
+
+## combinator_pairs (結合者向け)
+- 「痛み 1 本」と「技術/情報/手法 1 本」を組み合わせて新しい解決策が発想できそうなペア
+- pain_signal_ids: 痛み・愚痴・困りごとを含むシグナルの UUID 配列 (1 個以上)
+- info_signal_ids: 新しい API / ライブラリ / 手法 / ノウハウを含むシグナルの UUID 配列 (1 個以上)
+- pain_signal_ids と info_signal_ids は重複してはならない
+- angle は「何と何の掛け合わせか」を短く (例: "新 OSS × 記事管理の面倒", "LLM Function Calling × SaaS 運用")
+
+## gap_candidates (隙間発見者向け)
+- 既存プロダクト告知 (Launch HN / Show HN) や有料サービス言及から「まだ誰も埋めていない隙間」を狙うネタ元
+- 1 signal からでも成立する
+- angle は以下のいずれか:
+  - "launch_hn": Launch HN や YC ローンチ告知。需要検証済み事例の隙間
+  - "show_hn":   Show HN の自作プロダクト告知。隣接ドメインへの移植ネタ
+  - "paid_service_mention": 有料サービスへの言及・批判・不満
+  - "niche_transfer": 特定ドメインで成功している手法を別ドメインに持ち込むネタ
+  - "other": 上記に当てはまらないが隙間として面白い単発シグナル
+- hint はどの方向で隙間を狙うかの短文 (例: "非エンジニア向けに UI を落とし込む", "日本市場向け")
+
+# 判定ルール
+
+- 1 つのシグナルを複数のバンドル/候補に入れてもよい (集約バンドルに入れつつ隙間候補にも入れる等)
+- ノイズ (単なるニュース紹介・自慢話・リリースノートのみで痛みが見えない) はどのバンドルにも入れない
+- 日本語圏のシグナル中心なので、英語圏情報源 (HN) でも日本語で theme/angle/hint を書く
+- 出力シグナル ID は入力の UUID をそのまま使う。存在しない UUID は使わない
+- 候補が 0 件の種類があってもよい (該当なしなら空配列)
+
+# 優先度ヒント
+
+HN の hn_story_type (HN シグナルのみに付与):
+- "launch" → gap_candidates の "launch_hn" に強く振る
+- "show"   → gap_candidates の "show_hn" に強く振る
+- "ask"    → 痛みが具体的な質問なので aggregator または combinator 候補
+- "tell" / "normal" → 痛みが明確な場合のみ拾う`;
 
 function buildUserPrompt(signals: HaikuSignalInput[]): string {
   return [
-    `以下 ${signals.length} 件のシグナルから個人開発アイデア候補を抽出してください。`,
-    `各シグナルの id は UUID です。source_signal_ids にはそのまま入力の UUID を使ってください。`,
+    `以下 ${signals.length} 件のシグナルをクラスタリングしてください。`,
+    `各シグナルの id は UUID です。バンドルの signal_ids にはそのまま入力の UUID を使ってください。`,
     '',
     JSON.stringify(signals, null, 2),
   ].join('\n');
 }
 
-function chunk<T>(items: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    out.push(items.slice(i, i + size));
+function filterAggregator(
+  bundles: AggregatorBundle[],
+  validIds: Set<string>,
+): AggregatorBundle[] {
+  const out: AggregatorBundle[] = [];
+  for (const b of bundles) {
+    const ids = b.signal_ids.filter((id) => validIds.has(id));
+    // 重複除外
+    const unique = Array.from(new Set(ids));
+    if (unique.length < 3) {
+      console.warn(
+        `[haiku] drop aggregator_bundle (valid_ids<3 after filter): theme="${b.theme}"`,
+      );
+      continue;
+    }
+    out.push({ theme: b.theme, signal_ids: unique });
   }
   return out;
 }
 
-// chunk 間の素朴な重複排除: title (normalized) + category が完全一致したら
-// source_signal_ids をマージし、raw_score は大きい方を採用。
-function mergeDuplicates(
-  candidates: HaikuIdeaCandidate[],
-): HaikuIdeaCandidate[] {
-  const byKey = new Map<string, HaikuIdeaCandidate>();
-  for (const c of candidates) {
-    const key = `${c.category}|${c.title.trim().toLowerCase()}`;
-    const existing = byKey.get(key);
-    if (!existing) {
-      byKey.set(key, c);
+function filterCombinator(
+  pairs: CombinatorPair[],
+  validIds: Set<string>,
+): CombinatorPair[] {
+  const out: CombinatorPair[] = [];
+  for (const p of pairs) {
+    const pain = Array.from(new Set(p.pain_signal_ids.filter((id) => validIds.has(id))));
+    const infoRaw = Array.from(new Set(p.info_signal_ids.filter((id) => validIds.has(id))));
+    // pain と info は重複不可
+    const info = infoRaw.filter((id) => !pain.includes(id));
+    if (pain.length < 1 || info.length < 1) {
+      console.warn(
+        `[haiku] drop combinator_pair (pain<1 or info<1 after filter): angle="${p.angle}"`,
+      );
       continue;
     }
-    const mergedIds = new Set([...existing.source_signal_ids, ...c.source_signal_ids]);
-    byKey.set(key, {
-      ...existing,
-      raw_score: Math.max(existing.raw_score, c.raw_score),
-      source_signal_ids: Array.from(mergedIds),
-    });
+    out.push({ angle: p.angle, pain_signal_ids: pain, info_signal_ids: info });
   }
-  return Array.from(byKey.values());
+  return out;
 }
 
-export async function extractIdeas(
-  signals: HaikuSignalInput[],
-): Promise<HaikuIdeaCandidate[]> {
-  if (signals.length === 0) return [];
-
-  const validIds = new Set(signals.map((s) => s.id));
-  const chunks = chunk(signals, HAIKU_CHUNK_SIZE);
-
-  console.log(
-    `[haiku] signals=${signals.length} chunks=${chunks.length} size=${HAIKU_CHUNK_SIZE}`,
-  );
-
-  const perChunk = await Promise.all(
-    chunks.map(async (part, idx) => {
-      try {
-        const parsed = await callParsed({
-          model: HAIKU_MODEL,
-          system: HAIKU_SYSTEM,
-          user: buildUserPrompt(part),
-          schema: HaikuOutputSchema,
-          maxTokens: HAIKU_MAX_TOKENS,
-          logPrefix: `[haiku chunk=${idx + 1}/${chunks.length}]`,
-        });
-        return parsed.candidates;
-      } catch (err) {
-        console.warn(
-          `[haiku] chunk ${idx + 1}/${chunks.length} failed, skipping:`,
-          err instanceof Error ? err.message : err,
-        );
-        return [];
-      }
-    }),
-  );
-
-  // 無効な signal_id を除外しつつフラット化
-  const flattened: HaikuIdeaCandidate[] = [];
-  for (const cs of perChunk) {
-    for (const c of cs) {
-      const filtered = c.source_signal_ids.filter((id) => validIds.has(id));
-      if (filtered.length === 0) {
-        console.warn(`[haiku] drop candidate (no valid source ids): ${c.title}`);
-        continue;
-      }
-      flattened.push({ ...c, source_signal_ids: filtered });
+function filterGap(
+  gaps: GapCandidate[],
+  validIds: Set<string>,
+): GapCandidate[] {
+  const out: GapCandidate[] = [];
+  for (const g of gaps) {
+    const ids = Array.from(new Set(g.signal_ids.filter((id) => validIds.has(id))));
+    if (ids.length < 1) {
+      console.warn(
+        `[haiku] drop gap_candidate (valid_ids<1 after filter): angle=${g.angle} hint="${g.hint}"`,
+      );
+      continue;
     }
+    out.push({ angle: g.angle, hint: g.hint, signal_ids: ids });
+  }
+  return out;
+}
+
+export async function clusterSignals(
+  signals: HaikuSignalInput[],
+): Promise<HaikuClusterOutput> {
+  if (signals.length === 0) {
+    return { aggregator_bundles: [], combinator_pairs: [], gap_candidates: [] };
   }
 
-  const deduped = mergeDuplicates(flattened);
+  // 上限超過時は新しい signal 優先でトリム
+  const trimmed = signals.length > HAIKU_MAX_SIGNALS ? signals.slice(0, HAIKU_MAX_SIGNALS) : signals;
+  if (trimmed.length < signals.length) {
+    console.warn(
+      `[haiku] signals trimmed ${signals.length}→${trimmed.length} (max=${HAIKU_MAX_SIGNALS})`,
+    );
+  }
+
+  console.log(`[haiku] cluster_input=${trimmed.length}`);
+
+  const parsed = await callParsed({
+    model: HAIKU_MODEL,
+    system: HAIKU_SYSTEM,
+    user: buildUserPrompt(trimmed),
+    schema: HaikuClusterOutputSchema,
+    maxTokens: HAIKU_MAX_TOKENS,
+    logPrefix: '[haiku cluster]',
+  });
+
+  const validIds = new Set(trimmed.map((s) => s.id));
+  const aggregator = filterAggregator(parsed.aggregator_bundles, validIds);
+  const combinator = filterCombinator(parsed.combinator_pairs, validIds);
+  const gap = filterGap(parsed.gap_candidates, validIds);
+
   console.log(
-    `[haiku] candidates=${flattened.length} after_dedup=${deduped.length}`,
+    `[haiku] aggregator_bundles=${aggregator.length} combinator_pairs=${combinator.length} gap_candidates=${gap.length}`,
   );
-  return deduped;
+
+  return {
+    aggregator_bundles: aggregator,
+    combinator_pairs: combinator,
+    gap_candidates: gap,
+  };
 }

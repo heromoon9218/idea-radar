@@ -1,6 +1,14 @@
 // Anthropic SDK v0.90: messages.parse + zodOutputFormat で構造化出力を 1 発で取る薄いラッパ。
 // API キーは遅延初期化する。smoke (コレクタ単体) など LLM を呼ばない経路でも
 // 本ファイルが transitively import されるため、トップレベル throw は回避。
+//
+// Prompt caching:
+// - cacheSystem=true で system プロンプトに cache_control=ephemeral を付ける
+// - 5 分以内に同じ system で再呼び出しすれば cached_input_tokens がカウントされ、
+//   システム部分は通常の入力トークン料金の 10% に割引される
+// - 書き込み (初回) は 1.25x のコストがかかるため、2 回以上呼ぶ経路でのみ有効化する
+// - 同日実行でも analyze 1 回のみだと書き込み分だけ損するので、Sonnet の
+//   3 役割ドラフトと 3 軸スコアリング (10 回) のように複数回呼ぶ経路で特に効く
 
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
@@ -25,6 +33,8 @@ export interface CallParsedArgs<Schema extends ZodType> {
   schema: Schema;
   maxTokens: number;
   logPrefix: string;
+  // true のとき system プロンプトに cache_control=ephemeral を付ける
+  cacheSystem?: boolean;
 }
 
 export async function callParsed<Schema extends ZodType>(
@@ -32,18 +42,41 @@ export async function callParsed<Schema extends ZodType>(
 ): Promise<ZodInfer<Schema>> {
   const client = getClient();
   const started = Date.now();
+
+  // cacheSystem=true のとき system を cache_control 付きブロックとして送る
+  // (string で渡すと cache_control を付けられない)
+  const systemParam = args.cacheSystem
+    ? [
+        {
+          type: 'text' as const,
+          text: args.system,
+          cache_control: { type: 'ephemeral' as const },
+        },
+      ]
+    : args.system;
+
   const msg = await client.messages.parse({
     model: args.model,
     max_tokens: args.maxTokens,
-    system: args.system,
+    system: systemParam,
     messages: [{ role: 'user', content: args.user }],
     output_config: { format: zodOutputFormat(args.schema) },
   });
   const ms = Date.now() - started;
 
   const usage = msg.usage;
+  // cache 統計は cacheSystem=true のときは常に出す (0 でも出す)。
+  // 「書き込みすら 0」なのか「そもそも cacheSystem=false」なのかをログで区別できるようにして、
+  // 本番 1-2 日稼働後に caching が効いているか判断する材料にする。
+  // SDK 版によって型定義が未同期の可能性があるため unknown 経由で取り出す。
+  const anyUsage = usage as unknown as Record<string, number | undefined>;
+  const cacheRead = anyUsage.cache_read_input_tokens ?? 0;
+  const cacheWrite = anyUsage.cache_creation_input_tokens ?? 0;
+  const cacheSuffix = args.cacheSystem
+    ? ` cached_read=${cacheRead} cached_write=${cacheWrite}`
+    : '';
   console.log(
-    `${args.logPrefix} model=${args.model} in=${usage.input_tokens} out=${usage.output_tokens} ${ms}ms`,
+    `${args.logPrefix} model=${args.model} in=${usage.input_tokens} out=${usage.output_tokens}${cacheSuffix} ${ms}ms`,
   );
 
   if (!msg.parsed_output) {

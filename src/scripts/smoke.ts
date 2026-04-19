@@ -1,7 +1,7 @@
 // 認証不要なコレクタ / 認証必要な analyze パイプラインのスモークテスト。
 // 使い方:
 //   npx tsx src/scripts/smoke.ts                 # コレクタ 3 種を dry-run (認証不要)
-//   npx tsx src/scripts/smoke.ts --analyze       # Haiku / Tavily / Sonnet を 1 件だけ通電確認
+//   npx tsx src/scripts/smoke.ts --analyze       # Haiku cluster / 3 Sonnet 役割 / Tavily / Sonnet score を 1 件だけ通電確認
 //                                                (要 ANTHROPIC_API_KEY, TAVILY_API_KEY,
 //                                                 SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 //   npx tsx src/scripts/smoke.ts --deliver-dry   # 未配信 ideas から Markdown を生成して stdout。
@@ -12,13 +12,19 @@ import 'dotenv/config';
 import { collectHatena } from '../collectors/hatena.js';
 import { collectZenn } from '../collectors/zenn.js';
 import { collectHackerNews } from '../collectors/hackernews.js';
-import { extractIdeas } from '../analyzers/haiku.js';
+import { clusterSignals } from '../analyzers/haiku.js';
+import { draftFromAggregatorBundle } from '../analyzers/sonnet-aggregator.js';
+import { draftFromCombinatorPair } from '../analyzers/sonnet-combinator.js';
+import { draftFromGapCandidate } from '../analyzers/sonnet-gap-finder.js';
 import { scoreIdea } from '../analyzers/sonnet.js';
 import { tavilySearch } from '../lib/tavily.js';
 import { supabase } from '../db/supabase.js';
 import {
   HaikuSignalInputSchema,
+  HnStoryTypeSchema,
+  type HaikuIdeaCandidate,
   type HaikuSignalInput,
+  type IdeaRole,
   type RawSignalInput,
 } from '../types.js';
 import {
@@ -30,7 +36,8 @@ import { markdownToHtml } from '../report/markdown-to-html.js';
 import { buildSubject, resolveSlotBase } from '../report/slot.js';
 
 const WINDOW_MIN = 1440; // 過去24h
-const ANALYZE_SAMPLE_SIZE = 5;
+// analyze smoke はクラスタリングの精度確認もしたいので多めに取る (通常運用と同等の入力量)
+const ANALYZE_SAMPLE_SIZE = 50;
 
 type SmokeCollector = readonly [string, () => Promise<RawSignalInput[]>];
 
@@ -60,13 +67,16 @@ async function smokeCollectors(): Promise<void> {
   }
 }
 
+// 新パイプライン (Haiku cluster + 3 Sonnet 役割) を 1 件ずつだけ通電確認する。
+// 3 役割それぞれ「最初の 1 入力」のみドラフト → 出力されたアイデアのうち 1 件を
+// Tavily + Sonnet スコアリングまで通す。本番の analyze.ts より軽量な dry-run。
 async function smokeAnalyze(): Promise<void> {
   console.log(`[smoke-analyze] sample_size=${ANALYZE_SAMPLE_SIZE}`);
 
   // 1) DB からサンプル signals を取得 (processed 問わず最新を拾う)
   const { data, error } = await supabase
     .from('raw_signals')
-    .select('id, source, title, content, url')
+    .select('id, source, title, content, url, metadata')
     .order('collected_at', { ascending: false })
     .limit(ANALYZE_SAMPLE_SIZE);
   if (error) throw error;
@@ -79,7 +89,20 @@ async function smokeAnalyze(): Promise<void> {
 
   const signals: HaikuSignalInput[] = [];
   for (const r of rows) {
-    const parsed = HaikuSignalInputSchema.safeParse(r);
+    const enriched: Record<string, unknown> = {
+      id: r.id,
+      source: r.source,
+      title: r.title,
+      content: r.content,
+      url: r.url,
+    };
+    if (r.source === 'hackernews' && r.metadata) {
+      const parsed = HnStoryTypeSchema.safeParse(
+        (r.metadata as Record<string, unknown>).story_type,
+      );
+      if (parsed.success) enriched.hn_story_type = parsed.data;
+    }
+    const parsed = HaikuSignalInputSchema.safeParse(enriched);
     if (!parsed.success) {
       console.warn(`[smoke-analyze] drop invalid signal ${r.id}: ${parsed.error.message}`);
       continue;
@@ -90,18 +113,66 @@ async function smokeAnalyze(): Promise<void> {
     console.log('[smoke-analyze] no valid signals, aborting');
     return;
   }
+  const signalsById = new Map(signals.map((s) => [s.id, s] as const));
 
-  // 2) Haiku 1 chunk
-  const candidates = await extractIdeas(signals);
-  console.log(`[smoke-analyze] haiku_candidates=${candidates.length}`);
-  if (candidates.length === 0) {
-    console.log('[smoke-analyze] no candidates from Haiku, stopping');
+  // 2) Haiku クラスタリング
+  const cluster = await clusterSignals(signals);
+  console.log(
+    `[smoke-analyze] aggregator_bundles=${cluster.aggregator_bundles.length} combinator_pairs=${cluster.combinator_pairs.length} gap_candidates=${cluster.gap_candidates.length}`,
+  );
+
+  // 3) 各役割 最初の 1 入力だけドラフト
+  const drafted: Array<HaikuIdeaCandidate & { role: IdeaRole }> = [];
+
+  const firstAgg = cluster.aggregator_bundles[0];
+  if (firstAgg) {
+    try {
+      const cands = await draftFromAggregatorBundle({ bundle: firstAgg, signalsById });
+      console.log(`[smoke-analyze] aggregator drafted=${cands.length}`);
+      for (const c of cands) drafted.push({ ...c, role: 'aggregator' });
+    } catch (err) {
+      console.warn('[smoke-analyze] aggregator failed:', err instanceof Error ? err.message : err);
+    }
+  } else {
+    console.log('[smoke-analyze] no aggregator_bundle in sample, skipping');
+  }
+
+  const firstCom = cluster.combinator_pairs[0];
+  if (firstCom) {
+    try {
+      const cands = await draftFromCombinatorPair({ pair: firstCom, signalsById });
+      console.log(`[smoke-analyze] combinator drafted=${cands.length}`);
+      for (const c of cands) drafted.push({ ...c, role: 'combinator' });
+    } catch (err) {
+      console.warn('[smoke-analyze] combinator failed:', err instanceof Error ? err.message : err);
+    }
+  } else {
+    console.log('[smoke-analyze] no combinator_pair in sample, skipping');
+  }
+
+  const firstGap = cluster.gap_candidates[0];
+  if (firstGap) {
+    try {
+      const cands = await draftFromGapCandidate({ candidate: firstGap, signalsById });
+      console.log(`[smoke-analyze] gap_finder drafted=${cands.length}`);
+      for (const c of cands) drafted.push({ ...c, role: 'gap_finder' });
+    } catch (err) {
+      console.warn('[smoke-analyze] gap_finder failed:', err instanceof Error ? err.message : err);
+    }
+  } else {
+    console.log('[smoke-analyze] no gap_candidate in sample, skipping');
+  }
+
+  if (drafted.length === 0) {
+    console.log('[smoke-analyze] no drafts produced, stopping');
     return;
   }
 
-  // 3) 最上位 1 件だけ Tavily + Sonnet を通電
-  const top = [...candidates].sort((a, b) => b.raw_score - a.raw_score)[0]!;
-  console.log('[smoke-analyze] top candidate:');
+  console.log(`[smoke-analyze] drafts_total=${drafted.length}`);
+
+  // 4) 最上位 1 件だけ Tavily + Sonnet スコアリングを通電
+  const top = [...drafted].sort((a, b) => b.raw_score - a.raw_score)[0]!;
+  console.log(`[smoke-analyze] top role=${top.role} title="${top.title}"`);
   console.log(JSON.stringify(top, null, 2));
 
   let hits: Awaited<ReturnType<typeof tavilySearch>> = [];
@@ -113,7 +184,7 @@ async function smokeAnalyze(): Promise<void> {
   }
 
   const scored = await scoreIdea(top, hits);
-  console.log('[smoke-analyze] sonnet_output:');
+  console.log('[smoke-analyze] sonnet_score_output:');
   console.log(JSON.stringify(scored, null, 2));
   console.log(
     `[smoke-analyze] total_score=${
