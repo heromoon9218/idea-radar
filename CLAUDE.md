@@ -93,6 +93,11 @@ deliver.yml (UTC 23:30 = JST 08:30、analyze から 15min マージン)
 
 Hacker News のタイトル先頭 `Show/Ask/Launch/Tell HN:` は個人開発ネタの金鉱として Haiku クラスタリングで `gap_candidates` (show_hn / launch_hn) に強く振るための優先度シグナル。`hackernews.ts:classifyHnTitle` で分類 → `raw_signals.metadata.story_type` に格納 → `analyze.ts:toHaikuInputs` で `hn_story_type` にリフト → `HAIKU_SYSTEM` プロンプトに判定指針として渡る。新ソース追加時に類似のメタデータを通す必要がある場合、この 3 点を揃えること。
 
+### HN normal ノイズフィルタ
+
+`collect.ts` は `collectHackerNews` に `normalTopByScore: 100` を渡す。HN `normal` (Show/Ask/Launch/Tell プリフィックスなしの通常投稿) は 24h で 400+ 件発生し score 1-2 で埋もれる記事が大半なので、HN score 上位 100 件のみ採用してノイズを削る設計。`show` / `ask` / `launch` / `tell` は本数が少なく質も高いので常に全件保持する。
+これにより日次の収集件数は hatena (~38) + zenn (~100) + HN 非 normal (~75) + HN normal top 100 = **約 313 件** に抑えられ、analyze の `MAX_SIGNALS_PER_BATCH=500` に収まって取りこぼし (未処理のまま 24h window から外れて永久に処理されない問題) が発生しない。閾値を触る場合はこの収支を確認すること。
+
 ### Prompt caching
 
 `callParsed` は `cacheSystem?: boolean` オプションを持つ。true のとき system プロンプトに `cache_control: ephemeral` を付け、5 分以内の再呼び出しで cached_input_tokens として 10% コストで扱われる。書き込みは 1.25× コストなので **2 回以上呼ぶ経路でのみ有効化**するのが原則。

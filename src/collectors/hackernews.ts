@@ -19,6 +19,11 @@ export function classifyHnTitle(title: string): HnStoryType {
 export interface CollectHackerNewsOptions {
   // 指定した story_type のみ収集する。未指定なら全件（タグ付けのみ）。
   storyTypes?: HnStoryType[];
+  // normal (Show/Ask/Launch/Tell HN プリフィックスを持たない通常投稿) は
+  // 量が多くノイズ比が高いので、HN score 上位 N 件のみ採用する。
+  // show / ask / launch / tell は本数が少なく質も高いので常に全件保持する。
+  // 未指定なら全件保持 (旧挙動互換)。
+  normalTopByScore?: number;
 }
 
 interface HNItem {
@@ -113,6 +118,30 @@ export async function collectHackerNews(
   console.log(
     `[hn] story_type breakdown show=${typeCounts.show} ask=${typeCounts.ask} launch=${typeCounts.launch} tell=${typeCounts.tell} normal=${typeCounts.normal}`,
   );
+
+  // normal を score 上位 N 件に絞る (オプション指定時のみ)。
+  // HN の normal は 24h で 400+ 件発生することがあり、そのほとんどは score 1-2 で埋もれる。
+  // score は newstories 列挙時点のスナップショットなので、当日朝に収集するジョブでは
+  // 「既に浮上した記事 = score 高」が良い痛みシグナルの proxy になる。
+  if (options.normalTopByScore !== undefined && typeCounts.normal > options.normalTopByScore) {
+    const limit = options.normalTopByScore;
+    const isNormal = (r: RawSignalInput): boolean =>
+      (r.metadata as { story_type?: HnStoryType } | null)?.story_type === 'normal';
+    const nonNormals = results.filter((r) => !isNormal(r));
+    const topNormals = results
+      .filter(isNormal)
+      .sort((a, b) => {
+        const sa = (a.metadata as { score?: number | null } | null)?.score ?? 0;
+        const sb = (b.metadata as { score?: number | null } | null)?.score ?? 0;
+        return sb - sa;
+      })
+      .slice(0, limit);
+    const droppedNormals = typeCounts.normal - topNormals.length;
+    console.log(
+      `[hn] normal filter: kept top ${topNormals.length}/${typeCounts.normal} by score (dropped ${droppedNormals})`,
+    );
+    return [...nonNormals, ...topNormals];
+  }
 
   return results;
 }
