@@ -59,9 +59,8 @@ async function main(): Promise<void> {
     // 軽量ドメイン (クリエイター / 副業 / 個人 EC / 個人投資家 / 自己管理) の痛みを拾うソース。
     //   note:   複数ハッシュタグ RSS 束ね (~50-150 件)
     //   reddit: 5 subreddit × 25 件 = 最大 125 件 (stickied / NSFW 除外後やや減る)
-    // 既存 313 件 + note ~100 + reddit ~100 = 約 510 件 になる見込み。
-    // analyze 側の MAX_SIGNALS_PER_BATCH=500 を超える可能性があり、その時は
-    // limit を collect.ts 側で削るか、analyze 側の上限を引き上げる検討が必要。
+    // 既存 313 件 + note ~100 + reddit ~100 = 約 510 件 になる見込みのため、
+    // analyze 側の MAX_SIGNALS_PER_BATCH は 500 → 700 に引き上げ済み (src/analyze.ts)。
     ['note', () => collectNote(WINDOW_MINUTES)],
     ['reddit', () => collectReddit(WINDOW_MINUTES)],
   ];

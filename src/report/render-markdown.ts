@@ -44,8 +44,12 @@ export function renderMarkdown(ideas: IdeaWithSources[], ctx: RenderContext): st
     lines.push('');
     lines.push(`**WHAT (何を作るか)**: ${escapeInline(idea.what)}`);
     lines.push('');
-    lines.push(`**HOW (どう実現するか)**: ${escapeInline(idea.how)}`);
-    lines.push('');
+    // 旧 ideas (why/what/how マイグレーション以前にバックフィルされた行) では how が空文字で残る。
+    // 空の見出し行を出さないようガードする。新規 analyze 経由の行は zod min(1) で非空保証済み。
+    if (idea.how.trim().length > 0) {
+      lines.push(`**HOW (どう実現するか)**: ${escapeInline(idea.how)}`);
+      lines.push('');
+    }
     lines.push(`**カテゴリ**: ${CATEGORY_JA[idea.category]}`);
     lines.push('');
     lines.push(
