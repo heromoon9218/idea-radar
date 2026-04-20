@@ -4,6 +4,11 @@ export const SourceTypeSchema = z.enum([
   'hatena',
   'zenn',
   'hackernews',
+  // 軽量ドメインの痛みを拾うための非技術系ソース:
+  //   note   = 日本語のクリエイター / 副業 / 投資 / ブロガー 系ハッシュタグ
+  //   reddit = 英語の SMB / サイドハッスル / ハンドメイド EC / 自己管理 系 subreddit
+  'note',
+  'reddit',
 ]);
 export type SourceType = z.infer<typeof SourceTypeSchema>;
 

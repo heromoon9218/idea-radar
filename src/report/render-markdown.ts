@@ -21,6 +21,8 @@ const SOURCE_JA: Record<SourceLink['source'], string> = {
   hatena: 'はてブ',
   zenn: 'Zenn',
   hackernews: 'HN',
+  note: 'note',
+  reddit: 'Reddit',
 };
 
 const TITLE_TRUNCATE = 60;
