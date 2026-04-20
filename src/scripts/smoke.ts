@@ -12,6 +12,8 @@ import 'dotenv/config';
 import { collectHatena } from '../collectors/hatena.js';
 import { collectZenn } from '../collectors/zenn.js';
 import { collectHackerNews } from '../collectors/hackernews.js';
+import { collectNote } from '../collectors/note.js';
+import { collectReddit } from '../collectors/reddit.js';
 import { clusterSignals } from '../analyzers/haiku.js';
 import { draftFromAggregatorBundle } from '../analyzers/sonnet-aggregator.js';
 import { draftFromCombinatorPair } from '../analyzers/sonnet-combinator.js';
@@ -46,6 +48,8 @@ async function smokeCollectors(): Promise<void> {
     ['hatena', () => collectHatena(WINDOW_MIN)],
     ['zenn', () => collectZenn(WINDOW_MIN)],
     ['hackernews', () => collectHackerNews(WINDOW_MIN, { normalTopByScore: 100 })],
+    ['note', () => collectNote(WINDOW_MIN)],
+    ['reddit', () => collectReddit(WINDOW_MIN)],
   ];
 
   for (const [name, fn] of collectors) {

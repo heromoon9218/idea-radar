@@ -4,6 +4,11 @@ export const SourceTypeSchema = z.enum([
   'hatena',
   'zenn',
   'hackernews',
+  // 軽量ドメインの痛みを拾うための非技術系ソース:
+  //   note   = 日本語のクリエイター / 副業 / 投資 / ブロガー 系ハッシュタグ
+  //   reddit = 英語の SMB / サイドハッスル / ハンドメイド EC / 自己管理 系 subreddit
+  'note',
+  'reddit',
 ]);
 export type SourceType = z.infer<typeof SourceTypeSchema>;
 
@@ -92,10 +97,17 @@ export type HaikuClusterOutput = z.infer<typeof HaikuClusterOutputSchema>;
 export const IdeaRoleSchema = z.enum(['aggregator', 'combinator', 'gap_finder']);
 export type IdeaRole = z.infer<typeof IdeaRoleSchema>;
 
+// アイデアは WHY / WHAT / HOW の 3 段構成で記述する:
+//   why  = 誰のどんな痛みか (ターゲット像 + 状況 + 困りごと)
+//   what = 何を作るか (プロダクト概要 + 差別化 + 収益モデル)
+//   how  = どう実現するか (技術スタック + MVP 最小構成 + 実装難度 / 期間)
+// レポートで「HOW が薄い = 実装イメージが無い」のフィルタに使えるため、
+// 3 フィールドとも具体文を強制する (zod min(1))。
 export const HaikuIdeaCandidateSchema = z.object({
   title: z.string().min(1),
-  pain_summary: z.string().min(1),
-  idea_description: z.string().min(1),
+  why: z.string().min(1),
+  what: z.string().min(1),
+  how: z.string().min(1),
   category: IdeaCategorySchema,
   raw_score: z.number().int().min(1).max(5),
   source_signal_ids: z.array(z.string().uuid()).min(1),
@@ -123,8 +135,9 @@ export type Competitor = z.infer<typeof CompetitorSchema>;
 // Sonnet が返すスコアリング済みアイデア
 export const SonnetScoredIdeaSchema = z.object({
   title: z.string().min(1),
-  pain_summary: z.string().min(1),
-  idea_description: z.string().min(1),
+  why: z.string().min(1),
+  what: z.string().min(1),
+  how: z.string().min(1),
   category: IdeaCategorySchema,
   market_score: z.number().int().min(1).max(5),
   tech_score: z.number().int().min(1).max(5),

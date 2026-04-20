@@ -79,8 +79,9 @@
 ### `ideas`（構造化済みアイデア）
 - `id` (uuid, pk)
 - `title` (text, アイデアタイトル)
-- `pain_summary` (text, 痛みの要約)
-- `idea_description` (text, アイデア詳細)
+- `why` (text, 誰のどんな痛みか: ターゲット + 状況)
+- `what` (text, 何を作るか: プロダクト概要 + 差別化 + 収益モデル)
+- `how` (text, どう実現するか: 技術スタック + MVP 構成 + 実装難度)
 - `category` (enum: dev-tool / productivity / saas / ai / other)
 - `market_score` (int, 1-5, 市場性)
 - `tech_score` (int, 1-5, 技術難度の低さ)
@@ -149,9 +150,11 @@
 
 ## 1. {{title}}
 
-**痛み**: {{pain_summary}}
+**WHY (誰のどんな痛みか)**: {{why}}
 
-**アイデア**: {{idea_description}}
+**WHAT (何を作るか)**: {{what}}
+
+**HOW (どう実現するか)**: {{how}}
 
 **カテゴリ**: {{category}}
 

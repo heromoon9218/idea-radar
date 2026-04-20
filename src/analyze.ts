@@ -32,7 +32,10 @@ import {
 } from './types.js';
 
 const WINDOW_HOURS = 24;
-const MAX_SIGNALS_PER_BATCH = 500;
+// Sprint 3 で note / reddit を追加して合計 signals 数が 491 → 将来 550+ になる見込みのため 700 に拡張。
+// Haiku のコンテキストウィンドウは 200k+ で余裕があり、Sonnet × 3 役割は Top 10 のみがコスト対象なので
+// signal 数増加がコストに線形比例しないため、上限引き上げは安全。
+const MAX_SIGNALS_PER_BATCH = 700;
 const SONNET_TOP_N = 10;
 const INSERT_TOP_N = 5;
 
@@ -267,8 +270,9 @@ async function scoreTopCandidates(
 function toIdeaRow(s: SonnetScoredIdea): Record<string, unknown> {
   return {
     title: s.title,
-    pain_summary: s.pain_summary,
-    idea_description: s.idea_description,
+    why: s.why,
+    what: s.what,
+    how: s.how,
     category: s.category,
     market_score: s.market_score,
     tech_score: s.tech_score,

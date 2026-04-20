@@ -16,8 +16,9 @@ const REPORTED_LOOKBACK_DAYS = 2;
 const IdeaRowSchema = z.object({
   id: z.string().uuid(),
   title: z.string(),
-  pain_summary: z.string(),
-  idea_description: z.string(),
+  why: z.string(),
+  what: z.string(),
+  how: z.string(),
   category: IdeaCategorySchema,
   market_score: z.number().int(),
   tech_score: z.number().int(),
@@ -40,8 +41,9 @@ export interface SourceLink {
 export interface IdeaWithSources {
   id: string;
   title: string;
-  pain_summary: string;
-  idea_description: string;
+  why: string;
+  what: string;
+  how: string;
   category: z.infer<typeof IdeaCategorySchema>;
   market_score: number;
   tech_score: number;
@@ -65,7 +67,7 @@ export async function fetchUndeliveredTopIdeas(): Promise<IdeaRow[]> {
   const { data, error } = await supabase
     .from('ideas')
     .select(
-      'id, title, pain_summary, idea_description, category, market_score, tech_score, competition_score, total_score, competitors, source_signal_ids, created_at',
+      'id, title, why, what, how, category, market_score, tech_score, competition_score, total_score, competitors, source_signal_ids, created_at',
     )
     .is('delivered_at', null)
     .gte('created_at', since)
@@ -151,8 +153,9 @@ export async function attachSourceLinks(ideas: IdeaRow[]): Promise<IdeaWithSourc
     return {
       id: idea.id,
       title: idea.title,
-      pain_summary: idea.pain_summary,
-      idea_description: idea.idea_description,
+      why: idea.why,
+      what: idea.what,
+      how: idea.how,
       category: idea.category,
       market_score: idea.market_score,
       tech_score: idea.tech_score,
