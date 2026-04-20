@@ -38,9 +38,11 @@ export function renderMarkdown(ideas: IdeaWithSources[], ctx: RenderContext): st
     const total = idea.market_score + idea.tech_score + idea.competition_score;
     lines.push(`## ${i + 1}. ${escapeInline(idea.title)}`);
     lines.push('');
-    lines.push(`**痛み**: ${escapeInline(idea.pain_summary)}`);
+    lines.push(`**WHY (誰のどんな痛みか)**: ${escapeInline(idea.why)}`);
     lines.push('');
-    lines.push(`**アイデア**: ${escapeInline(idea.idea_description)}`);
+    lines.push(`**WHAT (何を作るか)**: ${escapeInline(idea.what)}`);
+    lines.push('');
+    lines.push(`**HOW (どう実現するか)**: ${escapeInline(idea.how)}`);
     lines.push('');
     lines.push(`**カテゴリ**: ${CATEGORY_JA[idea.category]}`);
     lines.push('');

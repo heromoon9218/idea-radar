@@ -267,8 +267,9 @@ async function scoreTopCandidates(
 function toIdeaRow(s: SonnetScoredIdea): Record<string, unknown> {
   return {
     title: s.title,
-    pain_summary: s.pain_summary,
-    idea_description: s.idea_description,
+    why: s.why,
+    what: s.what,
+    how: s.how,
     category: s.category,
     market_score: s.market_score,
     tech_score: s.tech_score,
