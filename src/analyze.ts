@@ -17,18 +17,31 @@ import { clusterSignals } from './analyzers/haiku.js';
 import { draftFromAggregatorBundle } from './analyzers/sonnet-aggregator.js';
 import { draftFromCombinatorPair } from './analyzers/sonnet-combinator.js';
 import { draftFromGapCandidate } from './analyzers/sonnet-gap-finder.js';
-import { scoreIdea } from './analyzers/sonnet.js';
+import {
+  buildDemandSummary,
+  logLineDemandSummary,
+  type DemandSummary,
+} from './analyzers/demand-summary.js';
+import { scoreIdea, type TavilyStatus } from './analyzers/sonnet.js';
 import { mapWithLimit } from './lib/concurrency.js';
+import {
+  computeWeightedScore,
+  describeBandConfig,
+  TECH_SCORE_MIN,
+  type BandConfig,
+} from './lib/goal-band.js';
 import { tavilySearch, type TavilySearchResult } from './lib/tavily.js';
 import {
   HaikuSignalInputSchema,
   HnStoryTypeSchema,
+  SourceTypeSchema,
   type HaikuIdeaCandidate,
   type HaikuSignalInput,
   type IdeaCategory,
   type IdeaRole,
   type RoleTaggedCandidate,
   type SonnetScoredIdea,
+  type SourceType,
 } from './types.js';
 
 const WINDOW_HOURS = 24;
@@ -63,8 +76,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function sum3(s: SonnetScoredIdea): number {
-  return s.market_score + s.tech_score + s.competition_score;
+interface ScoredWithWeight extends SonnetScoredIdea {
+  role: IdeaRole;
+  weighted_score: number;
 }
 
 interface SignalRow {
@@ -118,11 +132,20 @@ function toHaikuInputs(rows: SignalRow[]): HaikuSignalInput[] {
 
 // 3 役割を並列で起草させ、全候補を role タグ付きで返す。
 // 1 つの役割がコケても他は生かす (Promise.allSettled 相当の扱い)。
+// metadataById は bundle 単位の需要シグナルサマリ (bkm / HN score 等) 計算用。
 async function draftByThreeRoles(
   cluster: Awaited<ReturnType<typeof clusterSignals>>,
   signals: HaikuSignalInput[],
+  metadataById: Map<string, { source: SourceType; metadata: Record<string, unknown> | null }>,
 ): Promise<RoleTaggedCandidate[]> {
   const signalsById = new Map(signals.map((s) => [s.id, s] as const));
+
+  // 各バンドルの demand_summary を事前計算して drafter に渡す。null 可。
+  const summarize = (ids: string[], label: string): DemandSummary | null => {
+    const s = buildDemandSummary(ids, metadataById);
+    console.log(logLineDemandSummary(label, s));
+    return s;
+  };
 
   const runRole = async (
     role: IdeaRole,
@@ -167,21 +190,37 @@ async function draftByThreeRoles(
     runRole('aggregator', () =>
       safeMap(
         cluster.aggregator_bundles,
-        (bundle) => draftFromAggregatorBundle({ bundle, signalsById }),
+        (bundle) =>
+          draftFromAggregatorBundle({
+            bundle,
+            signalsById,
+            demandSummary: summarize(bundle.signal_ids, `aggregator theme="${bundle.theme.slice(0, 30)}"`),
+          }),
         'aggregator',
       ),
     ),
     runRole('combinator', () =>
       safeMap(
         cluster.combinator_pairs,
-        (pair) => draftFromCombinatorPair({ pair, signalsById }),
+        (pair) =>
+          draftFromCombinatorPair({
+            pair,
+            signalsById,
+            painDemandSummary: summarize(pair.pain_signal_ids, `combinator pain angle="${pair.angle.slice(0, 30)}"`),
+            infoDemandSummary: summarize(pair.info_signal_ids, `combinator info angle="${pair.angle.slice(0, 30)}"`),
+          }),
         'combinator',
       ),
     ),
     runRole('gap_finder', () =>
       safeMap(
         cluster.gap_candidates,
-        (candidate) => draftFromGapCandidate({ candidate, signalsById }),
+        (candidate) =>
+          draftFromGapCandidate({
+            candidate,
+            signalsById,
+            demandSummary: summarize(candidate.signal_ids, `gap_finder angle=${candidate.angle}`),
+          }),
         'gap_finder',
       ),
     ),
@@ -217,7 +256,8 @@ function dedupeCandidates(
 
 async function scoreTopCandidates(
   candidates: RoleTaggedCandidate[],
-): Promise<Array<SonnetScoredIdea & { role: IdeaRole }>> {
+  bandConfig: BandConfig,
+): Promise<ScoredWithWeight[]> {
   const top = [...candidates]
     .sort((a, b) => b.raw_score - a.raw_score)
     .slice(0, SONNET_TOP_N);
@@ -233,7 +273,7 @@ async function scoreTopCandidates(
     `[analyze] sonnet_top=${top.length} by_role aggregator=${roleCount.aggregator} combinator=${roleCount.combinator} gap_finder=${roleCount.gap_finder}`,
   );
 
-  const scored: Array<SonnetScoredIdea & { role: IdeaRole }> = [];
+  const scored: ScoredWithWeight[] = [];
   let lastSearchAt = 0;
 
   for (const c of top) {
@@ -241,21 +281,28 @@ async function scoreTopCandidates(
     if (wait > 0) await sleep(wait);
 
     let hits: TavilySearchResult[] = [];
+    let status: TavilyStatus = 'ok';
     try {
       const q = `${c.title} ${CATEGORY_EN[c.category]}`.trim();
       hits = await tavilySearch(q, 5);
-      console.log(`[tavily] q="${q}" hits=${hits.length}`);
+      status = hits.length === 0 ? 'empty' : 'ok';
+      console.log(`[tavily] q="${q}" hits=${hits.length} status=${status}`);
     } catch (err) {
+      status = 'failed';
       console.warn(
-        `[tavily] failed for "${c.title}":`,
+        `[tavily] failed for "${c.title}" status=failed:`,
         err instanceof Error ? err.message : err,
       );
     }
     lastSearchAt = Date.now();
 
     try {
-      const result = await scoreIdea(c, hits);
-      scored.push({ ...result, role: c.role });
+      const result = await scoreIdea(c, hits, status, {
+        band: bandConfig.band,
+        targetMrr: bandConfig.targetMrr,
+      });
+      const weighted_score = computeWeightedScore(result, bandConfig.weights);
+      scored.push({ ...result, role: c.role, weighted_score });
     } catch (err) {
       console.error(
         `[analyze] sonnet score failed for "${c.title}":`,
@@ -267,7 +314,7 @@ async function scoreTopCandidates(
   return scored;
 }
 
-function toIdeaRow(s: SonnetScoredIdea): Record<string, unknown> {
+function toIdeaRow(s: ScoredWithWeight): Record<string, unknown> {
   return {
     title: s.title,
     why: s.why,
@@ -277,14 +324,16 @@ function toIdeaRow(s: SonnetScoredIdea): Record<string, unknown> {
     market_score: s.market_score,
     tech_score: s.tech_score,
     competition_score: s.competition_score,
+    weighted_score: s.weighted_score,
     competitors: s.competitors,
     source_signal_ids: s.source_signal_ids,
   };
 }
 
 async function main(): Promise<void> {
+  const bandConfig = describeBandConfig();
   console.log(
-    `[analyze] window=${WINDOW_HOURS}h, started=${new Date().toISOString()}`,
+    `[analyze] window=${WINDOW_HOURS}h, started=${new Date().toISOString()} ${bandConfig.logLine}`,
   );
 
   const rows = await fetchUnprocessedSignals();
@@ -298,6 +347,18 @@ async function main(): Promise<void> {
   if (signals.length === 0) {
     console.log('[analyze] no valid signals after parse, exiting');
     return;
+  }
+
+  // 需要シグナルサマリ計算用に source + metadata を id で引けるようにしておく。
+  // SourceType の enum に入っていない値 (旧データ) はスキップする。
+  const metadataById = new Map<
+    string,
+    { source: SourceType; metadata: Record<string, unknown> | null }
+  >();
+  for (const r of rows) {
+    const src = SourceTypeSchema.safeParse(r.source);
+    if (!src.success) continue;
+    metadataById.set(r.id, { source: src.data, metadata: r.metadata });
   }
 
   // 1) Haiku クラスタリング
@@ -314,7 +375,7 @@ async function main(): Promise<void> {
   }
 
   // 2) Sonnet × 3 役割並列でアイデア起草
-  const drafted = await draftByThreeRoles(cluster, signals);
+  const drafted = await draftByThreeRoles(cluster, signals, metadataById);
   console.log(`[analyze] total_drafted=${drafted.length}`);
   if (drafted.length === 0) {
     await markProcessed(signals.map((s) => s.id));
@@ -329,13 +390,24 @@ async function main(): Promise<void> {
     console.log(`[analyze] after_dedup=${candidates.length} removed=${removed}`);
   }
 
-  // 4) Top 10 を Tavily + Sonnet 3 軸スコアリング
-  const scored = await scoreTopCandidates(candidates);
+  // 4) Top 10 を Tavily + Sonnet 3 軸スコアリング (帯依存 rubric)
+  const scored = await scoreTopCandidates(candidates, bandConfig);
   console.log(`[analyze] sonnet_scored=${scored.length}`);
 
-  // 5) 合計スコアで Top 5
-  const finals = [...scored]
-    .sort((a, b) => sum3(b) - sum3(a))
+  // 5) 足切り: tech_score が TECH_SCORE_MIN 未満のアイデアは個人開発で MVP に辿り着けない
+  //    可能性が高いので ideas への insert 対象から除外する (帯に関係なく共通)。
+  //    結果 5 件を下回る日は実件数で deliver する (件数保証より品質保証を優先)。
+  const passed = scored.filter((s) => s.tech_score >= TECH_SCORE_MIN);
+  const filteredOut = scored.length - passed.length;
+  if (filteredOut > 0) {
+    console.log(
+      `[analyze] tech_score_filter removed=${filteredOut} (tech_score < ${TECH_SCORE_MIN})`,
+    );
+  }
+
+  // 6) weighted_score DESC で Top 5
+  const finals = [...passed]
+    .sort((a, b) => b.weighted_score - a.weighted_score)
     .slice(0, INSERT_TOP_N);
 
   if (finals.length > 0) {

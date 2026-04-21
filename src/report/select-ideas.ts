@@ -13,6 +13,8 @@ const TOP_N = 5;
 const REPORTED_LOOKBACK_DAYS = 2;
 
 // competitors は jsonb なので parse は後段 (parseCompetitors) に任せる。
+// weighted_score は Sprint A-3 で追加された numeric(4,2) 列。
+// Supabase クライアントは numeric を string で返すため z.coerce.number() で数値化する。
 const IdeaRowSchema = z.object({
   id: z.string().uuid(),
   title: z.string(),
@@ -24,6 +26,7 @@ const IdeaRowSchema = z.object({
   tech_score: z.number().int(),
   competition_score: z.number().int(),
   total_score: z.number().int(),
+  weighted_score: z.coerce.number(),
   competitors: z.unknown(),
   source_signal_ids: z.array(z.string().uuid()),
   created_at: z.string(),
@@ -49,6 +52,7 @@ export interface IdeaWithSources {
   tech_score: number;
   competition_score: number;
   total_score: number;
+  weighted_score: number;
   competitors: Competitor[];
   source_signal_ids: string[];
   created_at: string;
@@ -67,11 +71,13 @@ export async function fetchUndeliveredTopIdeas(): Promise<IdeaRow[]> {
   const { data, error } = await supabase
     .from('ideas')
     .select(
-      'id, title, why, what, how, category, market_score, tech_score, competition_score, total_score, competitors, source_signal_ids, created_at',
+      'id, title, why, what, how, category, market_score, tech_score, competition_score, total_score, weighted_score, competitors, source_signal_ids, created_at',
     )
     .is('delivered_at', null)
     .gte('created_at', since)
-    .order('total_score', { ascending: false })
+    // weighted_score は Sprint A-3 で追加された帯別重み付きスコア。既存の total_score より
+    // 個人開発ゴール (TARGET_MRR) に整合した順序で Top を選べる。
+    .order('weighted_score', { ascending: false })
     .order('created_at', { ascending: false })
     .limit(TOP_N * 2); // reports ガード除外後に TOP_N 確保するため多めに取る
 
@@ -161,6 +167,7 @@ export async function attachSourceLinks(ideas: IdeaRow[]): Promise<IdeaWithSourc
       tech_score: idea.tech_score,
       competition_score: idea.competition_score,
       total_score: idea.total_score,
+      weighted_score: idea.weighted_score,
       competitors,
       source_signal_ids: idea.source_signal_ids,
       created_at: idea.created_at,
