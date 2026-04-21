@@ -26,9 +26,9 @@ export function resolveGoalBand(targetMrr: number): GoalBand {
   return 'moat';
 }
 
-// 帯ごとの重み。max は `1 * 1.5 + 1 * 1.5 + 1 * 1.5 = 22.5` (niche-deep で market=tech=comp=5)
-// など帯により 15〜22.5 の範囲。Sonnet の raw スコアと別次元になるが、
-// ランキング用途なので絶対値ではなく同バッチ内の相対順序が担保されれば良い。
+// 帯ごとの重み。重み合計はいずれも 3.5 なので、全帯で max は `5 * 3.5 = 17.5`
+// (market=tech=comp=5 のとき)、min は `1 * 3.5 = 3.5`。Sonnet の raw スコアと
+// 別次元になるが、ランキング用途なので絶対値ではなく同バッチ内の相対順序が担保されれば良い。
 export function weightsFor(band: GoalBand): ScoreWeights {
   if (band === 'niche-deep') return { market: 1.0, tech: 1.0, competition: 1.5 };
   if (band === 'growth-channel') return { market: 1.5, tech: 1.0, competition: 1.0 };
