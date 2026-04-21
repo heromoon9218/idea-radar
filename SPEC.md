@@ -258,6 +258,83 @@ S1〜S3 で「毎朝アイデアが届く」基盤は完成した。Sprint A は
 1. Supabase 本番で `supabase/migrations/20260506000000_ideas_weighted_score.sql` を apply (`weighted_score` が NOT NULL のため deliver が走る前に必須)
 2. 通常どおり collect → analyze → deliver が動けば Sprint A 完了
 
+### Sprint B: 起草/スコアリングの構造追加（未着手 / 12〜18h 見込み）
+
+Sprint A の定量化 + 帯別重み付けで「精度の底」は上がった。Sprint B はその上で **「起草と採点に構造的な反証と追加観点を入れる」** フェーズ。LLM コストがやや増える (Top 10 への追加呼び出し) ため、効果を見ながら段階的に入れる。
+
+#### B-1: Devil's advocate 2-pass スコアリング
+
+- Sonnet 初回スコア後、別呼び出しで「このアイデアを却下すべき 3 つの理由」を生成し、それを踏まえて再スコアする 2-pass 構成
+- 甘めに振れる採点を締める定番手法。Top 10 のみ適用すればコスト増は限定的
+- 実装: `src/analyzers/sonnet-devils-advocate.ts` を追加し、`scoreIdea` 後に `critiqueAndRescore(scored)` を通す。reasoning を `ideas.devils_advocate` jsonb に保持して後続検証に使えるようにする
+
+#### B-2: 赤旗スキャン役割
+
+- 既存 3 役割はポジティブ発想。法規制・API 利用規約・データ取得正当性の「地雷」を拾う役割が無い
+- 追加する観点:
+  - 薬機法 (SaMD 該当性)、金商法、資金決済法、景表法
+  - スクレイピング禁止 API / 二要素認証越え
+  - 医療・金融の誤った安心感 (倫理リスク)
+- 実装: `src/analyzers/sonnet-risk-auditor.ts` を 4 番目の役割として追加。起草直後 (スコアリング前) に通して `ideas.risk_flags` に構造化して保持。赤旗ありでも除外はせず、deliver 側で「⚠️ 薬機法リスク: SaMD 該当性」等として Markdown に警告表示する
+- Tavily で「薬機法 ガイドライン 2024」等を裏取りする経路を持たせるかは B-4 のクエリ多角化と合わせて判断
+
+#### B-3: フェルミ推定の必須化
+
+- 現状のアイデアには「どれくらい売れるか」の定量見積もりがなく、reality check が効いていない
+- 各アイデアに「TARGET_MRR 到達に必要な顧客数 × 想定 ARPU × 継続月数」のフェルミ推定を必須化 (例: 買い切り 3,000 円 × 月 17 本で月 5 万円)
+- 実装: drafter 3 役割の出力スキーマ (`HaikuIdeaCandidateSchema`) に `fermi_estimate: { unit_price, unit_type, mrr_formula }` を追加。推定不可能なアイデアは drafter が自主的に除外 (raw_score を下げる) する運用
+- Markdown 表記に「月 5 万円到達: 買い切り 3,000 円 × 月 17 本」等の 1 行を追加
+
+#### B-4: 検索クエリの多角化
+
+- 現状 Tavily は `title + category_en` の英語 1 クエリのみ。日本市場の競合検出精度が弱い
+- 改善: 以下 2-3 本を並列で投げて結果を union
+  - 英語: `title + category_en` (現行)
+  - 日本語: `title`（日本語）+ 「競合」「類似サービス」
+  - 機能ワード: `what` から主要機能を 1-2 語抽出 + 英語
+- Tavily 無料枠 1,000 req/月の範囲内に収まるよう、Top 10 × 2-3 クエリ = 月 600-900 req で試算
+- 実装: `src/lib/tavily.ts` に `searchParallel(queries)` を追加、`analyze.ts` の `scoreTopCandidates` から呼ぶ
+
+**Sprint B 完了基準（外部観察可能）:**
+- [ ] Top 10 のアイデアに Devil's advocate 2-pass が適用され、ideas テーブルに却下理由が保持される
+- [ ] 薬機法 / API 利用規約等のリスクがあるアイデアに `risk_flags` が付き、Markdown に警告表示される
+- [ ] 全アイデアがフェルミ推定を含み、Markdown に「月 5 万円到達: ...」行が出る
+- [ ] Tavily クエリが 2-3 本並列で投げられ、日本語競合が拾えるようになる
+- [ ] LLM + Tavily 月コスト増が $10 以下に収まる
+
+### Sprint C: スキーマ拡張と semantic 類似判定（未着手 / 10〜15h 見込み）
+
+Sprint A/B が運用で効いているのを確認してから入れる。migration を伴うので Sprint B との同時着手は避ける。
+
+#### C-1: 流通仮説フィールド（distribution_hypothesis）
+
+- 「月 5 万円到達は作れば来るのではなく届け方次第」というゴール帯の認識をスキーマに刻む
+- `ideas.distribution_hypothesis` を jsonb で追加。中身:
+  - `channels`: 接触候補（コミュニティ / B2B 直営業 / 既存ツール連携）
+  - `first_10_users`: 最初の 10 人をどう獲得するか
+  - `sns_dependency`: SNS 依存度 (high/mid/low)。high は weighted_score 減点
+- drafter 3 役割のスキーマと system prompt に反映
+- Markdown に「**流通仮説**: ...」セクションを追加
+
+#### C-2: Semantic dedup（embedding による近似重複除外）
+
+- Sprint A で削除した「過去 N 日重複除外」が、運用が長くなって必要になった場合に備える (現時点では月 5 件 × 多様な 3-5 ソースで被りは少ない想定)
+- `ideas.embedding vector(1024)` 列を Supabase pgvector で追加
+- Anthropic / Voyage / OpenAI small のどれかで `title + what` を embedding
+- analyze 内で直近 14〜30 日の既存 idea とコサイン類似度 > 0.85 のアイデアを除外
+- 既存の軽量 dedup (title+category 完全一致) は残す (同一バッチ内の drafter 重複吸収用)
+
+**Sprint C 完了基準:**
+- [ ] `ideas.distribution_hypothesis` が新規 insert で必ず埋まる
+- [ ] Markdown に流通仮説セクションが出る
+- [ ] pgvector + embedding が稼働し、14 日以内の類似アイデアが除外される
+- [ ] embedding コストが月 $3 以下
+
+### 保留（当面は入れない）
+
+- **3 役割間の cross-pollination**（combinator が aggregator の出力を参照する等）: 並列 → 直列化で analyze 時間が伸び、効果が不確実。B-1 の Devil's advocate で「別視点の反証」は代替される
+- **ピボット候補の自動生成**（A/B/C 案併記）: Devil's advocate で「却下理由」が出れば人間側でピボット判断できる。月 5 件しか配信しない規模で AI が自動ピボットまでやる必要性は薄い
+
 ## コスト試算（月額）
 
 | 項目 | コスト |
