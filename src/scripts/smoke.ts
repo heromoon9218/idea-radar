@@ -263,8 +263,6 @@ async function smokeDeliverDry(): Promise<void> {
 
   console.log('=== subject ===');
   console.log(subject);
-  console.log('=== filename (would write) ===');
-  console.log(base.filename);
   console.log('=== markdown ===');
   console.log(markdown);
   console.log('=== html (first 1200 chars) ===');

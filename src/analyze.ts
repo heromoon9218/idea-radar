@@ -54,11 +54,16 @@ const INSERT_TOP_N = 5;
 
 // Sonnet drafter の同時実行数上限 (役割内)。
 // 3 役割を Promise.all で並列に走らせるので、理論最大は 3 × DRAFT_CONCURRENCY 件。
-// 値の選定理由:
-//   - 小さすぎると 1 回の analyze が遅くなる (バンドル数 20 なら逐次で 20 × ~5s = 100s)
-//   - 大きすぎると Anthropic API のレート制限 / prompt cache のヒット率低下
-//   - 3 役割 × 3 = 9 並列なら各役割で先頭 1-2 件が cache を書き込み後続が読み取れる
-const DRAFT_CONCURRENCY = 3;
+// 値を 1 にしている理由:
+//   Sonnet 4.6 は organization 単位で 8,000 output tokens/min の TPM 制限があり、
+//   役割内 concurrency=3 (= 合計 9 並列) だと max_tokens=3072 のドラフトが同時発火して
+//   429 rate_limit_error を頻発する (実測: 2026-04-20 の analyze で combinator/gap_finder
+//   共に 4-5 回 429)。concurrency=1 にすると役割内は完全逐次になり、3 役割並列でも
+//   同時リクエストは 3 に収まる。1 ドラフトは ~20-40s かかるが、バンドル数は各役割
+//   10-20 件程度なので analyze 全体は 10-15min の timeout に収まる。
+//   副次効果: 逐次実行により prompt cache (ephemeral) の書き込み → 読み取りが確実に
+//   ヒットし、2 件目以降のコストが 10% になる。
+const DRAFT_CONCURRENCY = 1;
 
 // Tavily の無料プランで明示的な per-second レート制限は公表されていないが、
 // 10 req/バッチを数秒間隔で叩く保険として 300ms の最小間隔を置く。

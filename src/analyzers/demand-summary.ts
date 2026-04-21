@@ -3,8 +3,9 @@
 // Sonnet drafter に渡して痛みの強度を raw_score / WHY の根拠に反映させること。
 //
 // ソース横断で合算しない設計: hatena bkm / zenn likes / HN score は意味が違うため
-// ソース別に分けて集計する (合算値は誤読されやすい)。note / reddit は数値シグナルが
-// 少ないため個別セクションは出さない (reddit は score 集計するが分離は軽量実装)。
+// ソース別に分けて集計する (合算値は誤読されやすい)。note / reddit は数値シグナルを
+// 持たないため集計対象外 (reddit は 2026-04 に RSS に切り替えた際に score / num_comments
+// を取得しなくなった。Atom feed では配信されないため復活不可)。
 
 import type { SourceType } from '../types.js';
 
@@ -35,19 +36,11 @@ interface HackerNewsStats {
   totalComments: number;
 }
 
-interface RedditStats {
-  articleCount: number;
-  totalScore: number;
-  maxScore: number;
-  totalComments: number;
-}
-
 export interface DemandSummary {
   signalCount: number;
   hatena?: HatenaStats;
   zenn?: ZennStats;
   hackernews?: HackerNewsStats;
-  reddit?: RedditStats;
 }
 
 function toNumber(v: unknown): number | null {
@@ -69,8 +62,6 @@ export function buildDemandSummary(
   const zennComments: number[] = [];
   const hnScores: number[] = [];
   const hnComments: number[] = [];
-  const redditScores: number[] = [];
-  const redditComments: number[] = [];
   let resolvedCount = 0;
 
   for (const id of signalIds) {
@@ -93,13 +84,8 @@ export function buildDemandSummary(
       const comments = toNumber(meta.descendants);
       if (score !== null) hnScores.push(score);
       if (comments !== null) hnComments.push(comments);
-    } else if (ref.source === 'reddit') {
-      const score = toNumber(meta.score);
-      const comments = toNumber(meta.num_comments);
-      if (score !== null) redditScores.push(score);
-      if (comments !== null) redditComments.push(comments);
     }
-    // note は数値シグナルを持たないため集計なし
+    // note / reddit は数値シグナルを持たないため集計なし
   }
 
   if (resolvedCount === 0) return null;
@@ -135,19 +121,10 @@ export function buildDemandSummary(
       totalComments: sum(hnComments),
     };
   }
-  if (redditScores.length > 0) {
-    summary.reddit = {
-      articleCount: redditScores.length,
-      totalScore: sum(redditScores),
-      maxScore: max(redditScores),
-      totalComments: sum(redditComments),
-    };
-  }
 
   // signalCount 以外に意味のあるソース別集計が 1 つも無ければ null を返す
-  // (note 単独バンドルなど数値シグナルを持たないケース)。
-  const hasAnySource =
-    summary.hatena || summary.zenn || summary.hackernews || summary.reddit;
+  // (note / reddit 単独バンドルなど数値シグナルを持たないケース)。
+  const hasAnySource = summary.hatena || summary.zenn || summary.hackernews;
   if (!hasAnySource) return null;
   return summary;
 }
@@ -181,13 +158,6 @@ export function formatDemandSummaryForPrompt(summary: DemandSummary): string {
     if (hn.totalComments > 0) parts.push(`累計 comments ${hn.totalComments}`);
     lines.push(`- HN ${hn.articleCount} 記事: ${parts.join(' / ')}`);
   }
-  if (summary.reddit) {
-    const r = summary.reddit;
-    const parts: string[] = [];
-    parts.push(`累計 score ${r.totalScore} (最大 ${r.maxScore})`);
-    if (r.totalComments > 0) parts.push(`累計 comments ${r.totalComments}`);
-    lines.push(`- Reddit ${r.articleCount} 記事: ${parts.join(' / ')}`);
-  }
   lines.push(
     '',
     'これらの値は「痛みが複数人で裏取れているか」の強度指標です。WHY に 1 箇所以上の定量引用 (「累計 240 bkm」等) を含め、raw_score に反映してください。',
@@ -205,6 +175,5 @@ export function logLineDemandSummary(
   if (summary.hatena) parts.push(`bkm_total=${summary.hatena.totalBookmarks}`);
   if (summary.zenn) parts.push(`zenn_likes=${summary.zenn.totalLikes}`);
   if (summary.hackernews) parts.push(`hn_avg=${summary.hackernews.avgScore}`);
-  if (summary.reddit) parts.push(`reddit_score=${summary.reddit.totalScore}`);
   return `[analyze] demand_summary ${label} ${parts.join(' ')}`;
 }

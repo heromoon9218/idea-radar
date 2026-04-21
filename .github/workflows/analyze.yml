@@ -2,8 +2,8 @@ name: analyze
 
 on:
   schedule:
-    # UTC 23 時 = JST 翌朝 8 時 (1 日 1 回)
-    - cron: '0 23 * * *'
+    # UTC 22 時 = JST 翌朝 7 時 (1 日 1 回)
+    - cron: '0 22 * * *'
   workflow_dispatch:
 
 concurrency:

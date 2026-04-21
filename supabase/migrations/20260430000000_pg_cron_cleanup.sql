@@ -4,7 +4,8 @@
 -- pipeline (collect UTC22:00 → analyze UTC23:00 → deliver UTC23:30) が完了した後に走る時間設定。
 --
 -- ideas.source_signal_ids が dangling 参照になる可能性があるが、FK は張っておらず、
--- Markdown レポートは reports/*.md に commit 済みなので実害はない。
+-- 配信済み ideas は reports.idea_ids から辿れるため監査上の実害はない (配信前の raw_signals は
+-- 30 日以内なので生き残る想定)。
 -- processed=false のまま残った失敗レコードはクリーンアップ対象外 (意図的に手動調査用に残す)。
 
 create extension if not exists pg_cron;

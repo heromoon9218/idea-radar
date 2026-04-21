@@ -5,7 +5,8 @@
 -- idea_ids は FK 無しの緩い参照 (uuid[] は行単位 FK を持てないため)。
 --   deliver 側が idea_ids を参照して「直近 2 日に配信済みの idea は再配信しない」保護を掛けるので、
 --   このカラムは単なる監査ログ以上の役割を持つ。
--- Markdown 本文は reports/*.md として Git にも残るので、ideas 行削除時のリカバリはそちらから可能。
+-- Markdown 本文はメール送信のみで Git には残らないため、ideas 行削除時のリカバリは
+-- メール (Resend ログ) または ideas 再生成でしか復元できない。
 
 do $$ begin
   create type report_slot as enum ('am', 'pm');
