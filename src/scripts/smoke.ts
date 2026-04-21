@@ -15,19 +15,29 @@ import { collectHackerNews } from '../collectors/hackernews.js';
 import { collectNote } from '../collectors/note.js';
 import { collectReddit } from '../collectors/reddit.js';
 import { clusterSignals } from '../analyzers/haiku.js';
+import {
+  buildDemandSummary,
+  logLineDemandSummary,
+} from '../analyzers/demand-summary.js';
 import { draftFromAggregatorBundle } from '../analyzers/sonnet-aggregator.js';
 import { draftFromCombinatorPair } from '../analyzers/sonnet-combinator.js';
 import { draftFromGapCandidate } from '../analyzers/sonnet-gap-finder.js';
-import { scoreIdea } from '../analyzers/sonnet.js';
+import { scoreIdea, type TavilyStatus } from '../analyzers/sonnet.js';
+import {
+  computeWeightedScore,
+  describeBandConfig,
+} from '../lib/goal-band.js';
 import { tavilySearch } from '../lib/tavily.js';
 import { supabase } from '../db/supabase.js';
 import {
   HaikuSignalInputSchema,
   HnStoryTypeSchema,
+  SourceTypeSchema,
   type HaikuIdeaCandidate,
   type HaikuSignalInput,
   type IdeaRole,
   type RawSignalInput,
+  type SourceType,
 } from '../types.js';
 import {
   attachSourceLinks,
@@ -75,7 +85,8 @@ async function smokeCollectors(): Promise<void> {
 // 3 役割それぞれ「最初の 1 入力」のみドラフト → 出力されたアイデアのうち 1 件を
 // Tavily + Sonnet スコアリングまで通す。本番の analyze.ts より軽量な dry-run。
 async function smokeAnalyze(): Promise<void> {
-  console.log(`[smoke-analyze] sample_size=${ANALYZE_SAMPLE_SIZE}`);
+  const bandConfig = describeBandConfig();
+  console.log(`[smoke-analyze] sample_size=${ANALYZE_SAMPLE_SIZE} ${bandConfig.logLine}`);
 
   // 1) DB からサンプル signals を取得 (processed 問わず最新を拾う)
   const { data, error } = await supabase
@@ -92,6 +103,10 @@ async function smokeAnalyze(): Promise<void> {
   }
 
   const signals: HaikuSignalInput[] = [];
+  const metadataById = new Map<
+    string,
+    { source: SourceType; metadata: Record<string, unknown> | null }
+  >();
   for (const r of rows) {
     const enriched: Record<string, unknown> = {
       id: r.id,
@@ -112,6 +127,13 @@ async function smokeAnalyze(): Promise<void> {
       continue;
     }
     signals.push(parsed.data);
+    const src = SourceTypeSchema.safeParse(r.source);
+    if (src.success) {
+      metadataById.set(r.id, {
+        source: src.data,
+        metadata: (r.metadata as Record<string, unknown> | null) ?? null,
+      });
+    }
   }
   if (signals.length === 0) {
     console.log('[smoke-analyze] no valid signals, aborting');
@@ -131,7 +153,13 @@ async function smokeAnalyze(): Promise<void> {
   const firstAgg = cluster.aggregator_bundles[0];
   if (firstAgg) {
     try {
-      const cands = await draftFromAggregatorBundle({ bundle: firstAgg, signalsById });
+      const summary = buildDemandSummary(firstAgg.signal_ids, metadataById);
+      console.log(logLineDemandSummary(`aggregator theme="${firstAgg.theme.slice(0, 30)}"`, summary));
+      const cands = await draftFromAggregatorBundle({
+        bundle: firstAgg,
+        signalsById,
+        demandSummary: summary,
+      });
       console.log(`[smoke-analyze] aggregator drafted=${cands.length}`);
       for (const c of cands) drafted.push({ ...c, role: 'aggregator' });
     } catch (err) {
@@ -144,7 +172,16 @@ async function smokeAnalyze(): Promise<void> {
   const firstCom = cluster.combinator_pairs[0];
   if (firstCom) {
     try {
-      const cands = await draftFromCombinatorPair({ pair: firstCom, signalsById });
+      const painSummary = buildDemandSummary(firstCom.pain_signal_ids, metadataById);
+      const infoSummary = buildDemandSummary(firstCom.info_signal_ids, metadataById);
+      console.log(logLineDemandSummary(`combinator pain angle="${firstCom.angle.slice(0, 30)}"`, painSummary));
+      console.log(logLineDemandSummary(`combinator info angle="${firstCom.angle.slice(0, 30)}"`, infoSummary));
+      const cands = await draftFromCombinatorPair({
+        pair: firstCom,
+        signalsById,
+        painDemandSummary: painSummary,
+        infoDemandSummary: infoSummary,
+      });
       console.log(`[smoke-analyze] combinator drafted=${cands.length}`);
       for (const c of cands) drafted.push({ ...c, role: 'combinator' });
     } catch (err) {
@@ -157,7 +194,13 @@ async function smokeAnalyze(): Promise<void> {
   const firstGap = cluster.gap_candidates[0];
   if (firstGap) {
     try {
-      const cands = await draftFromGapCandidate({ candidate: firstGap, signalsById });
+      const summary = buildDemandSummary(firstGap.signal_ids, metadataById);
+      console.log(logLineDemandSummary(`gap_finder angle=${firstGap.angle}`, summary));
+      const cands = await draftFromGapCandidate({
+        candidate: firstGap,
+        signalsById,
+        demandSummary: summary,
+      });
       console.log(`[smoke-analyze] gap_finder drafted=${cands.length}`);
       for (const c of cands) drafted.push({ ...c, role: 'gap_finder' });
     } catch (err) {
@@ -180,20 +223,27 @@ async function smokeAnalyze(): Promise<void> {
   console.log(JSON.stringify(top, null, 2));
 
   let hits: Awaited<ReturnType<typeof tavilySearch>> = [];
+  let status: TavilyStatus = 'ok';
   try {
     hits = await tavilySearch(top.title, 5);
-    console.log(`[smoke-analyze] tavily_hits=${hits.length}`);
+    status = hits.length === 0 ? 'empty' : 'ok';
+    console.log(`[smoke-analyze] tavily_hits=${hits.length} status=${status}`);
   } catch (err) {
-    console.warn('[smoke-analyze] tavily failed:', err instanceof Error ? err.message : err);
+    status = 'failed';
+    console.warn('[smoke-analyze] tavily failed status=failed:', err instanceof Error ? err.message : err);
   }
 
-  const scored = await scoreIdea(top, hits);
+  const scored = await scoreIdea(top, hits, status, {
+    band: bandConfig.band,
+    targetMrr: bandConfig.targetMrr,
+  });
+  const weighted = computeWeightedScore(scored, bandConfig.weights);
   console.log('[smoke-analyze] sonnet_score_output:');
   console.log(JSON.stringify(scored, null, 2));
   console.log(
     `[smoke-analyze] total_score=${
       scored.market_score + scored.tech_score + scored.competition_score
-    }/15`,
+    }/15 weighted_score=${weighted.toFixed(2)} band=${bandConfig.band}`,
   );
 }
 

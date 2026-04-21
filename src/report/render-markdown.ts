@@ -37,7 +37,6 @@ export function renderMarkdown(ideas: IdeaWithSources[], ctx: RenderContext): st
   lines.push('');
 
   ideas.forEach((idea, i) => {
-    const total = idea.market_score + idea.tech_score + idea.competition_score;
     lines.push(`## ${i + 1}. ${escapeInline(idea.title)}`);
     lines.push('');
     lines.push(`**WHY (誰のどんな痛みか)**: ${escapeInline(idea.why)}`);
@@ -52,8 +51,10 @@ export function renderMarkdown(ideas: IdeaWithSources[], ctx: RenderContext): st
     }
     lines.push(`**カテゴリ**: ${CATEGORY_JA[idea.category]}`);
     lines.push('');
+    // weighted_score は Sprint A-3 で導入した帯別重み付きスコア (numeric, 小数 2 桁)。
+    // 3 軸は従来通り 1-5 で表示し、合計欄は重み適用後の値を 1 桁目まで示す。
     lines.push(
-      `**スコア**: 市場性 ${idea.market_score}/5 · 技術 ${idea.tech_score}/5 · 競合少 ${idea.competition_score}/5 · 合計 ${total}/15`,
+      `**スコア**: 市場性 ${idea.market_score}/5 · 技術 ${idea.tech_score}/5 · 競合少 ${idea.competition_score}/5 · 合計 ${idea.weighted_score.toFixed(1)}（重み付き）`,
     );
     lines.push('');
     lines.push(`**類似サービス**: ${formatCompetitors(idea.competitors)}`);
