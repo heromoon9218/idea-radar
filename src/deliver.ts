@@ -1,6 +1,5 @@
 // 日次配信エントリ。
-// 未配信 ideas Top 3-5 を取り → Markdown 生成 → Resend 送信 → reports 記録 → ideas.delivered_at 更新
-// → reports/YYYY-MM-DD-am.md をローカルに出力 (commit はワークフロー側)。
+// 未配信 ideas Top 3-5 を取り → Markdown 生成 → Resend 送信 → reports 記録 → ideas.delivered_at 更新。
 //
 // 冪等性:
 //   1. 冒頭で isAlreadyDelivered を見て、同日 am slot が既に記録済みなら skip
@@ -14,8 +13,6 @@
 //      同一 idea を除外するため、二重配信は発生しない
 
 import 'dotenv/config';
-import { promises as fs } from 'node:fs';
-import { dirname } from 'node:path';
 import {
   attachSourceLinks,
   fetchUndeliveredTopIdeas,
@@ -30,17 +27,6 @@ import {
 } from './report/persist.js';
 import { sendReportEmail } from './lib/resend.js';
 
-async function writeGitHubOutput(
-  values: { delivered: boolean; reportFile?: string },
-): Promise<void> {
-  const path = process.env.GITHUB_OUTPUT;
-  if (!path) return;
-  const lines: string[] = [];
-  lines.push(`delivered=${values.delivered ? 'true' : 'false'}`);
-  if (values.reportFile) lines.push(`report_file=${values.reportFile}`);
-  await fs.appendFile(path, lines.join('\n') + '\n');
-}
-
 async function main(): Promise<void> {
   const startedAt = new Date();
   console.log(`[deliver] started=${startedAt.toISOString()}`);
@@ -52,7 +38,6 @@ async function main(): Promise<void> {
     console.log(
       `[deliver] already delivered for ${base.date} ${base.slot}, skipping`,
     );
-    await writeGitHubOutput({ delivered: false });
     return;
   }
 
@@ -61,7 +46,6 @@ async function main(): Promise<void> {
 
   if (ideas.length === 0) {
     console.log('[deliver] no undelivered ideas, skipping');
-    await writeGitHubOutput({ delivered: false });
     return;
   }
 
@@ -82,12 +66,6 @@ async function main(): Promise<void> {
       err instanceof Error ? err.message : err,
     );
   }
-
-  // メール送信の前にローカルへ書き出しておく (送信成功 → ファイル commit の順)。
-  // 送信に失敗したら exit 1 で commit ステップがスキップされる。
-  await fs.mkdir(dirname(base.filename), { recursive: true });
-  await fs.writeFile(base.filename, markdown, 'utf8');
-  console.log(`[deliver] wrote ${base.filename}`);
 
   const resendId = await sendReportEmail({ subject, markdown, html });
   console.log(`[deliver] sent, resend_id=${resendId ?? '(none)'}`);
@@ -129,7 +107,6 @@ async function main(): Promise<void> {
     );
   }
 
-  await writeGitHubOutput({ delivered: true, reportFile: base.filename });
   console.log(`[deliver] done=${new Date().toISOString()}`);
 }
 

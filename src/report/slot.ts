@@ -8,7 +8,6 @@ export interface SlotBase {
   date: string;       // 'YYYY-MM-DD' (JST)
   slot: ReportSlot;   // 現状は常に 'am'
   slotLabel: string;  // 日本語 ('朝' | '夜')
-  filename: string;   // 'reports/YYYY-MM-DD-am.md'
 }
 
 const SLOT_LABELS: Record<ReportSlot, string> = {
@@ -29,7 +28,6 @@ export function resolveSlotBase(now: Date): SlotBase {
     date,
     slot,
     slotLabel,
-    filename: `reports/${date}-${slot}.md`,
   };
 }
 

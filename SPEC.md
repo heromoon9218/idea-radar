@@ -137,7 +137,7 @@
 - 直近 24 時間の未配信 `ideas` から `total_score DESC` で Top 3〜5 選出
 - Markdown レポート生成（テンプレート下記）
 - Resend で自分宛メール送信
-- レポートを `reports/YYYY-MM-DD-{am|pm}.md` としてリポジトリに commit
+- 配信物はメール本文のみ（リポジトリへの commit はしない）
 
 ### Markdown レポートテンプレート
 
@@ -194,7 +194,7 @@
 
 **完了基準**:
 - JST 朝 8:30 の 1 日 1 回、Top 3〜5 件の Markdown レポートが自分宛メールで届く
-- レポートが `reports/YYYY-MM-DD-am.md` としてリポジトリに commit される
+- 配信物はメール本文のみで、リポジトリへの commit は行わない（履歴は `reports` テーブルで参照する）
 - `reports` テーブルに配信ログが記録される（UNIQUE(date, slot) で 1 日 1 行）
 - 2 週間連続で安定稼働する
 

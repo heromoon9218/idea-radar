@@ -58,16 +58,10 @@ deliver.yml (UTC 23:30 = JST 08:30、analyze から 15min マージン)
   → src/deliver.ts
   → ideas (delivered_at IS NULL, 直近 24h, total_score DESC) Top 5 を選択
   → Markdown + HTML 生成 → Resend 送信
-  → reports insert / ideas.delivered_at 更新 / reports/YYYY-MM-DD-am.md を git push
+  → reports insert / ideas.delivered_at 更新（配信物はメールのみで、リポジトリへはコミットしない）
 ```
 
 各ワークフロー失敗時は `failure()` 条件で Issue を起票する（直近 24h の同ラベル Issue があればコメント追加のみ、Issue 乱立防止）。
-
-### `reports/` ディレクトリの扱い
-
-- **gitignore されていない出力ディレクトリ**。deliver 成功時に `reports/YYYY-MM-DD-am.md` がワークフローから自動 commit & push される
-- **`workflow_dispatch` を main 以外から起動しても commit されない**（`deliver.yml` が `GITHUB_REF != refs/heads/main` を検出して skip）。feature ブランチで配信テストしたい場合はメール送信のみ動き、レポートファイルは push されない
-- push 競合時は rebase retry が 3 回走る（`deliver.yml` 末尾）
 
 ### 冪等性・二重配信ガード（`src/deliver.ts` 冒頭コメント参照）
 
