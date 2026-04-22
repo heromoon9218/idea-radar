@@ -178,7 +178,7 @@
 - [Sprint A: 分析精度の底上げ](docs/sprints/sprint-a.md) — 需要シグナル定量化 / Tavily 状態ハンドリング / ゴール帯別 weighted_score
 - [Sprint B: 起草・スコアリングの構造追加](docs/sprints/sprint-b.md) — Devil's advocate 2-pass / 赤旗スキャン / フェルミ推定必須化 / Tavily クエリ多角化
 
-### Sprint C: スキーマ拡張と semantic 類似判定（未着手 / 10〜15h 見込み）
+### Sprint C: スキーマ拡張と semantic 類似判定（未着手）
 
 Sprint A/B が運用で効いているのを確認してから入れる。migration を伴うので Sprint B との同時着手は避ける。
 
