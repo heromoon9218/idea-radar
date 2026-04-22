@@ -170,139 +170,15 @@
 
 ## スプリント分割
 
-### S1: データ収集基盤（20〜25h）
+### 完了スプリント（履歴）
 
-**完了基準**（外部から観察可能な振る舞い）:
-- 3 ソース全てから 6 時間おきに新規データ取得が動作する
-- `raw_signals` テーブルに重複なく蓄積される
-- GitHub Actions `collect.yml` が 6 時間おきに自動実行される
-- 実行失敗時に通知が届く（GitHub Actions の Email 通知 or Issue 自動作成）
-- 最初の 24 時間で 3 ソースから最低合計 50 件以上のデータが入る
+完了済みスプリントの完了基準・設計判断は `docs/sprints/` に切り出している。本 SPEC.md は evergreen な仕様に集中する。
 
-### S2: LLM クラスタリング + 3 役割アイデア創出 + スコアリング（20〜25h）
+- [基盤スプリント S1 / S2 / S3](docs/sprints/s1-s3-foundation.md) — 収集 / 分析 / 配信 の 3 段パイプライン基盤
+- [Sprint A: 分析精度の底上げ](docs/sprints/sprint-a.md) — 需要シグナル定量化 / Tavily 状態ハンドリング / ゴール帯別 weighted_score
+- [Sprint B: 起草・スコアリングの構造追加](docs/sprints/sprint-b.md) — Devil's advocate 2-pass / 赤旗スキャン / フェルミ推定必須化 / Tavily クエリ多角化
 
-**完了基準**:
-- 日次バッチで直近 24 時間の `raw_signals` を処理しアイデア生成
-- Haiku によるクラスタリングが動作（`aggregator_bundles` / `combinator_pairs` / `gap_candidates` の 3 種類を出力）
-- Sonnet × 3 役割（集約者 / 結合者 / 隙間発見者）が並列でアイデア起草
-- Sonnet による 3 軸スコアリングが動作（Top 10 のみ）
-- Tavily Search による競合検索が動作
-- `ideas` テーブルに 1 回の実行あたり Top 3〜5 の完全なアイデアが格納される
-- 自己評価: 3 日間運用で「作りたい」と思うアイデアが 1 件以上出る、かつ 3 役割からそれぞれ少なくとも 1 件は最終出力されている日がある
-
-### S3: Markdown レポート + Resend 配信（10〜15h）
-
-**完了基準**:
-- JST 朝 7:30 の 1 日 1 回、Top 3〜5 件の Markdown レポートが自分宛メールで届く
-- 配信物はメール本文のみで、リポジトリへの commit は行わない（履歴は `reports` テーブルで参照する）
-- `reports` テーブルに配信ログが記録される（UNIQUE(date, slot) で 1 日 1 行）
-- 2 週間連続で安定稼働する
-
-### Sprint A: 分析精度の底上げ（12〜18h / 完了）
-
-S1〜S3 で「毎朝アイデアが届く」基盤は完成した。Sprint A は **analyze パイプラインの出力品質** を、ユーザーゴール (月 5 万円 = growth-channel 帯) に整合させる改修。3 つの改善を同一スプリントで実施する。
-
-#### A-1: 需要シグナル定量化を drafter に渡す
-
-- `raw_signals.metadata` に蓄積されているはてブ bookmark 数 / Zenn いいね・bookmarked 数 / HN score・descendants / Reddit score・comments を、**バンドル単位で集計して Sonnet drafter (3 役割) の user prompt に差し込む**
-- ソース横断で合算しない（意味が違うため個別に集計）
-- 実装: `src/analyzers/demand-summary.ts` (`buildDemandSummary` / `formatDemandSummaryForPrompt` / `logLineDemandSummary`)
-- drafter 3 役割 (`sonnet-aggregator.ts` / `sonnet-combinator.ts` / `sonnet-gap-finder.ts`) の system prompt 末尾に「需要シグナルサマリが提示されたら WHY に定量引用を含め raw_score に反映する」指示を追記
-- combinator は pain / info 側のサマリを別々に渡す (意味が違うため)
-
-**完了基準**:
-- analyze ログに各バンドルの `demand_summary` が 1 行で出る (`signals=5 bkm_total=482 hn_avg=62` 等)
-- WHY 本文に「累計 240 bkm」「HN 平均 87pt」等の定量引用を含む idea が週 5 日以上観測できる
-
-#### A-2: Tavily saturation バグ修正
-
-- Tavily 検索が失敗 or 空レスポンスのとき、Sonnet スコアラーが「競合なし」と誤読して `competition_score` を過大評価する問題
-- `TavilyStatus = 'ok' | 'empty' | 'failed'` を `sonnet.ts` で export し、`scoreIdea(candidate, hits, status, options)` シグネチャに追加
-- system rubric に「status が empty または failed の場合、競合状況を網羅的に検証できていないため competition_score は最大 3 に制限」を明記
-- user prompt に `# 検索状態` セクションを追加して状態を Sonnet に明示
-
-**完了基準**:
-- `analyze` ログで `[tavily] q="..." hits=N status=ok/empty/failed` が観測できる
-- Tavily 失敗日も `competition_score <= 3` に抑制される
-
-#### A-3: ゴール帯別スコアリング + 重み付き weighted_score + tech_score 足切り
-
-- 月収ゴール `TARGET_MRR` (定数、`src/lib/goal-band.ts` にハードコード、初期値 50000 円) に基づいて Sonnet rubric と `weighted_score` の重みを 3 帯で切り替える
-- 帯の境界値と重み (market / tech / competition):
-
-  | 帯 | 境界 | 重点 | 重み |
-  |---|---|---|---|
-  | niche-deep | ≤ 20,000 円 | コアユーザー深掘り、競合回避 > 市場サイズ | 1.0 / 1.0 / 1.5 |
-  | growth-channel | 20,001〜200,000 円 | 持続性・流通設計・支払文化 | 1.5 / 1.0 / 1.0 |
-  | moat | > 200,000 円 | 参入障壁 (データ / 規制) | 1.5 / 0.8 / 1.2 |
-
-- `tech_score < 3` の idea は **ideas への insert 対象から除外** (足切り)。足切り後 5 件を切る日は実件数で deliver する
-- `ideas.weighted_score numeric(4,2) NOT NULL` を新 migration で追加 (既存 `total_score` 列は互換維持)。重みは TypeScript 側で計算して insert する設計 (`TARGET_MRR` 定数を書き換えるだけで migration 不要)
-- deliver 側 (`select-ideas.ts`) は `order by weighted_score DESC` に切り替え、`render-markdown.ts` のスコア表示は「合計 X.X（重み付き）」形式に変更
-- 帯切り替え時は `src/lib/goal-band.ts` の `TARGET_MRR` 定数を書き換える (環境変数化しない)
-
-**完了基準**:
-- `analyze` ログに `target_mrr=50000 band=growth-channel weights=m1.5/t1.0/c1.0` が 1 回出る
-- `ideas.tech_score < 3` の新規 insert が発生しない
-- `ideas.weighted_score` が全新規行で NOT NULL、deliver 側が weighted_score 順で Top 5 を選ぶ
-- 新 migration (`20260506000000_ideas_weighted_score.sql`) が単独で apply 可能、既存 migration は無変更
-
-#### Sprint A 全体の完了判定 (Evaluator で PASS)
-
-- [x] A-1 / A-2 / A-3 の受け入れ基準を満たす
-- [x] `npm run typecheck` PASS
-- [x] 冪等性 3 層 (`reports` UNIQUE / `ideas.delivered_at` / reports ガード) への影響なし
-- [x] 既存 smoke コマンド (`--analyze` / `--deliver-dry`) は従来の引数で動作
-
-本番反映手順:
-1. Supabase 本番で `supabase/migrations/20260506000000_ideas_weighted_score.sql` を apply (`weighted_score` が NOT NULL のため deliver が走る前に必須)
-2. 通常どおり collect → analyze → deliver が動けば Sprint A 完了
-
-### Sprint B: 起草/スコアリングの構造追加（未着手 / 12〜18h 見込み）
-
-Sprint A の定量化 + 帯別重み付けで「精度の底」は上がった。Sprint B はその上で **「起草と採点に構造的な反証と追加観点を入れる」** フェーズ。LLM コストがやや増える (Top 10 への追加呼び出し) ため、効果を見ながら段階的に入れる。
-
-#### B-1: Devil's advocate 2-pass スコアリング
-
-- Sonnet 初回スコア後、別呼び出しで「このアイデアを却下すべき 3 つの理由」を生成し、それを踏まえて再スコアする 2-pass 構成
-- 甘めに振れる採点を締める定番手法。Top 10 のみ適用すればコスト増は限定的
-- 実装: `src/analyzers/sonnet-devils-advocate.ts` を追加し、`scoreIdea` 後に `critiqueAndRescore(scored)` を通す。reasoning を `ideas.devils_advocate` jsonb に保持して後続検証に使えるようにする
-
-#### B-2: 赤旗スキャン役割
-
-- 既存 3 役割はポジティブ発想。法規制・API 利用規約・データ取得正当性の「地雷」を拾う役割が無い
-- 追加する観点:
-  - 薬機法 (SaMD 該当性)、金商法、資金決済法、景表法
-  - スクレイピング禁止 API / 二要素認証越え
-  - 医療・金融の誤った安心感 (倫理リスク)
-- 実装: `src/analyzers/sonnet-risk-auditor.ts` を 4 番目の役割として追加。起草直後 (スコアリング前) に通して `ideas.risk_flags` に構造化して保持。赤旗ありでも除外はせず、deliver 側で「⚠️ 薬機法リスク: SaMD 該当性」等として Markdown に警告表示する
-- Tavily で「薬機法 ガイドライン 2024」等を裏取りする経路を持たせるかは B-4 のクエリ多角化と合わせて判断
-
-#### B-3: フェルミ推定の必須化
-
-- 現状のアイデアには「どれくらい売れるか」の定量見積もりがなく、reality check が効いていない
-- 各アイデアに「TARGET_MRR 到達に必要な顧客数 × 想定 ARPU × 継続月数」のフェルミ推定を必須化 (例: 買い切り 3,000 円 × 月 17 本で月 5 万円)
-- 実装: drafter 3 役割の出力スキーマ (`HaikuIdeaCandidateSchema`) に `fermi_estimate: { unit_price, unit_type, mrr_formula }` を追加。推定不可能なアイデアは drafter が自主的に除外 (raw_score を下げる) する運用
-- Markdown 表記に「月 5 万円到達: 買い切り 3,000 円 × 月 17 本」等の 1 行を追加
-
-#### B-4: 検索クエリの多角化
-
-- 現状 Tavily は `title + category_en` の英語 1 クエリのみ。日本市場の競合検出精度が弱い
-- 改善: 以下 2-3 本を並列で投げて結果を union
-  - 英語: `title + category_en` (現行)
-  - 日本語: `title`（日本語）+ 「競合」「類似サービス」
-  - 機能ワード: `what` から主要機能を 1-2 語抽出 + 英語
-- Tavily 無料枠 1,000 req/月の範囲内に収まるよう、Top 10 × 2-3 クエリ = 月 600-900 req で試算
-- 実装: `src/lib/tavily.ts` に `searchParallel(queries)` を追加、`analyze.ts` の `scoreTopCandidates` から呼ぶ
-
-**Sprint B 完了基準（外部観察可能）:**
-- [ ] Top 10 のアイデアに Devil's advocate 2-pass が適用され、ideas テーブルに却下理由が保持される
-- [ ] 薬機法 / API 利用規約等のリスクがあるアイデアに `risk_flags` が付き、Markdown に警告表示される
-- [ ] 全アイデアがフェルミ推定を含み、Markdown に「月 5 万円到達: ...」行が出る
-- [ ] Tavily クエリが 2-3 本並列で投げられ、日本語競合が拾えるようになる
-- [ ] LLM + Tavily 月コスト増が $10 以下に収まる
-
-### Sprint C: スキーマ拡張と semantic 類似判定（未着手 / 10〜15h 見込み）
+### Sprint C: スキーマ拡張と semantic 類似判定（未着手）
 
 Sprint A/B が運用で効いているのを確認してから入れる。migration を伴うので Sprint B との同時着手は避ける。
 
