@@ -97,12 +97,28 @@ export type HaikuClusterOutput = z.infer<typeof HaikuClusterOutputSchema>;
 export const IdeaRoleSchema = z.enum(['aggregator', 'combinator', 'gap_finder']);
 export type IdeaRole = z.infer<typeof IdeaRoleSchema>;
 
+// Sprint B-3: フェルミ推定。個人開発で TARGET_MRR に到達する道筋を必須化する。
+//   unit_price   = 想定単価 (円、正の整数)
+//   unit_type    = 'monthly' | 'one_time' | 'per_use' — 課金形態
+//   mrr_formula  = 「買い切り 3,000 円 × 月 17 本 = 51,000 円」のような自然文の算式。
+//                  Markdown への可読出力・人間レビューに使う。
+export const FermiUnitTypeSchema = z.enum(['monthly', 'one_time', 'per_use']);
+export type FermiUnitType = z.infer<typeof FermiUnitTypeSchema>;
+
+export const FermiEstimateSchema = z.object({
+  unit_price: z.number().int().min(1),
+  unit_type: FermiUnitTypeSchema,
+  mrr_formula: z.string().min(1),
+});
+export type FermiEstimate = z.infer<typeof FermiEstimateSchema>;
+
 // アイデアは WHY / WHAT / HOW の 3 段構成で記述する:
 //   why  = 誰のどんな痛みか (ターゲット像 + 状況 + 困りごと)
 //   what = 何を作るか (プロダクト概要 + 差別化 + 収益モデル)
 //   how  = どう実現するか (技術スタック + MVP 最小構成 + 実装難度 / 期間)
 // レポートで「HOW が薄い = 実装イメージが無い」のフィルタに使えるため、
 // 3 フィールドとも具体文を強制する (zod min(1))。
+// Sprint B-3: fermi_estimate を必須化 (drafter 3 役割は推定不可の場合アイデア自体を除外する)。
 export const HaikuIdeaCandidateSchema = z.object({
   title: z.string().min(1),
   why: z.string().min(1),
@@ -110,6 +126,7 @@ export const HaikuIdeaCandidateSchema = z.object({
   how: z.string().min(1),
   category: IdeaCategorySchema,
   raw_score: z.number().int().min(1).max(5),
+  fermi_estimate: FermiEstimateSchema,
   source_signal_ids: z.array(z.string().uuid()).min(1),
 });
 export type HaikuIdeaCandidate = z.infer<typeof HaikuIdeaCandidateSchema>;
@@ -132,7 +149,9 @@ export const CompetitorSchema = z.object({
 });
 export type Competitor = z.infer<typeof CompetitorSchema>;
 
-// Sonnet が返すスコアリング済みアイデア
+// Sonnet が返すスコアリング済みアイデア。
+// fermi_estimate は scoreIdea 内の LLM には触らせず、candidate 側の値を上書き保持する
+// (source_signal_ids と同じ扱い)。スキーマには含めない。
 export const SonnetScoredIdeaSchema = z.object({
   title: z.string().min(1),
   why: z.string().min(1),
@@ -146,3 +165,45 @@ export const SonnetScoredIdeaSchema = z.object({
   source_signal_ids: z.array(z.string().uuid()).min(1),
 });
 export type SonnetScoredIdea = z.infer<typeof SonnetScoredIdeaSchema>;
+
+// ---- Sprint B-1: Devil's advocate 2-pass ----
+// 初回スコア後に Sonnet に「却下すべき 3 つの理由」を挙げさせ、その上で 3 軸を再スコア。
+// reconsidered_* を最終値として insert し、ideas.devils_advocate に reasoning のみ残す。
+export const DevilsAdvocateOutputSchema = z.object({
+  rejection_reasons: z.array(z.string().min(1)).min(1).max(5),
+  reconsidered_market_score: z.number().int().min(1).max(5),
+  reconsidered_tech_score: z.number().int().min(1).max(5),
+  reconsidered_competition_score: z.number().int().min(1).max(5),
+  verdict: z.string().min(1),
+});
+export type DevilsAdvocateOutput = z.infer<typeof DevilsAdvocateOutputSchema>;
+
+// DB 保持用の ideas.devils_advocate jsonb 構造 (初回スコアと却下理由を audit trail として残す)
+export const DevilsAdvocatePersistedSchema = z.object({
+  rejection_reasons: z.array(z.string()),
+  verdict: z.string(),
+  initial_scores: z.object({
+    market: z.number().int(),
+    tech: z.number().int(),
+    competition: z.number().int(),
+  }),
+});
+export type DevilsAdvocatePersisted = z.infer<typeof DevilsAdvocatePersistedSchema>;
+
+// ---- Sprint B-2: 赤旗スキャン (risk-auditor) ----
+// 法規制 (薬機法・金商法・資金決済法・景表法) / API 規約違反 / 倫理リスクを
+// 1 アイデアあたり 0-5 件スキャン。赤旗ありでも除外はせず Markdown に警告表示。
+export const RiskSeveritySchema = z.enum(['low', 'mid', 'high']);
+export type RiskSeverity = z.infer<typeof RiskSeveritySchema>;
+
+export const RiskFlagSchema = z.object({
+  kind: z.string().min(1), // ラベル (例: "薬機法 (SaMD 該当性)", "Google Maps API 商用規約", "医療ドメインの倫理リスク")
+  severity: RiskSeveritySchema,
+  reason: z.string().min(1), // 1-2 文の根拠
+});
+export type RiskFlag = z.infer<typeof RiskFlagSchema>;
+
+export const RiskAuditOutputSchema = z.object({
+  risk_flags: z.array(RiskFlagSchema).max(5),
+});
+export type RiskAuditOutput = z.infer<typeof RiskAuditOutputSchema>;

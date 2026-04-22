@@ -3,7 +3,16 @@
 
 import { z } from 'zod';
 import { supabase } from '../db/supabase.js';
-import { CompetitorSchema, IdeaCategorySchema, SourceTypeSchema, type Competitor } from '../types.js';
+import {
+  CompetitorSchema,
+  FermiEstimateSchema,
+  IdeaCategorySchema,
+  RiskFlagSchema,
+  SourceTypeSchema,
+  type Competitor,
+  type FermiEstimate,
+  type RiskFlag,
+} from '../types.js';
 
 const WINDOW_HOURS = 24;
 const TOP_N = 5;
@@ -12,9 +21,10 @@ const TOP_N = 5;
 // 翌日の fetch で同じ idea を再度拾って二重配信するのを防ぐためのガード。
 const REPORTED_LOOKBACK_DAYS = 2;
 
-// competitors は jsonb なので parse は後段 (parseCompetitors) に任せる。
+// competitors / fermi_estimate / risk_flags は jsonb。parse は後段 (parseXxx) に任せる。
 // weighted_score は Sprint A-3 で追加された numeric(4,2) 列。
 // Supabase クライアントは numeric を string で返すため z.coerce.number() で数値化する。
+// Sprint B で追加された fermi_estimate / risk_flags は nullable (旧行は NULL のまま残るため)。
 const IdeaRowSchema = z.object({
   id: z.string().uuid(),
   title: z.string(),
@@ -30,6 +40,8 @@ const IdeaRowSchema = z.object({
   competitors: z.unknown(),
   source_signal_ids: z.array(z.string().uuid()),
   created_at: z.string(),
+  fermi_estimate: z.unknown().nullable().optional(),
+  risk_flags: z.unknown().nullable().optional(),
 });
 
 export type IdeaRow = z.infer<typeof IdeaRowSchema>;
@@ -57,6 +69,9 @@ export interface IdeaWithSources {
   source_signal_ids: string[];
   created_at: string;
   sources: SourceLink[];
+  // Sprint B で導入。旧行は未設定なので null 可。
+  fermi_estimate: FermiEstimate | null;
+  risk_flags: RiskFlag[];
 }
 
 const SignalRowSchema = z.object({
@@ -71,7 +86,7 @@ export async function fetchUndeliveredTopIdeas(): Promise<IdeaRow[]> {
   const { data, error } = await supabase
     .from('ideas')
     .select(
-      'id, title, why, what, how, category, market_score, tech_score, competition_score, total_score, weighted_score, competitors, source_signal_ids, created_at',
+      'id, title, why, what, how, category, market_score, tech_score, competition_score, total_score, weighted_score, competitors, source_signal_ids, created_at, fermi_estimate, risk_flags',
     )
     .is('delivered_at', null)
     .gte('created_at', since)
@@ -172,6 +187,8 @@ export async function attachSourceLinks(ideas: IdeaRow[]): Promise<IdeaWithSourc
       source_signal_ids: idea.source_signal_ids,
       created_at: idea.created_at,
       sources,
+      fermi_estimate: parseFermi(idea.fermi_estimate),
+      risk_flags: parseRiskFlags(idea.risk_flags),
     };
   });
 }
@@ -182,5 +199,23 @@ function parseCompetitors(raw: unknown): Competitor[] {
   const parsed = z.array(CompetitorSchema).safeParse(raw);
   if (parsed.success) return parsed.data;
   console.warn('[deliver] invalid competitors jsonb, falling back to []:', parsed.error.message);
+  return [];
+}
+
+// Sprint B: 旧 idea 行は NULL なので null 可で parse。
+// 壊れていたら null 扱いで続行 (Markdown で無視)。
+function parseFermi(raw: unknown): FermiEstimate | null {
+  if (raw === null || raw === undefined) return null;
+  const parsed = FermiEstimateSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  console.warn('[deliver] invalid fermi_estimate jsonb, dropping:', parsed.error.message);
+  return null;
+}
+
+function parseRiskFlags(raw: unknown): RiskFlag[] {
+  if (raw === null || raw === undefined) return [];
+  const parsed = z.array(RiskFlagSchema).safeParse(raw);
+  if (parsed.success) return parsed.data;
+  console.warn('[deliver] invalid risk_flags jsonb, falling back to []:', parsed.error.message);
   return [];
 }

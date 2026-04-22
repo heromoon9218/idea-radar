@@ -1,8 +1,9 @@
 // SPEC.md のテンプレートに従って Top アイデア群を Markdown に整形する。
 // 入力は IdeaWithSources[] (source_links, competitors は既に解決済み)。
 
-import type { IdeaCategory } from '../types.js';
+import type { FermiEstimate, FermiUnitType, IdeaCategory, RiskFlag, RiskSeverity } from '../types.js';
 import type { IdeaWithSources, SourceLink } from './select-ideas.js';
+import { TARGET_MRR } from '../lib/goal-band.js';
 
 export interface RenderContext {
   date: string;       // 'YYYY-MM-DD' (JST)
@@ -23,6 +24,19 @@ const SOURCE_JA: Record<SourceLink['source'], string> = {
   hackernews: 'HN',
   note: 'note',
   reddit: 'Reddit',
+};
+
+const FERMI_UNIT_JA: Record<FermiUnitType, string> = {
+  monthly: '月額',
+  one_time: '買い切り',
+  per_use: '従量課金',
+};
+
+// Sprint B-2: severity に応じた警告マーク。絵文字はメール配信先でも表示される前提。
+const RISK_SEVERITY_JA: Record<RiskSeverity, string> = {
+  high: '🚨 high',
+  mid: '⚠️ mid',
+  low: 'ℹ️ low',
 };
 
 const TITLE_TRUNCATE = 60;
@@ -57,8 +71,20 @@ export function renderMarkdown(ideas: IdeaWithSources[], ctx: RenderContext): st
       `**スコア**: 市場性 ${idea.market_score}/5 · 技術 ${idea.tech_score}/5 · 競合少 ${idea.competition_score}/5 · 合計 ${idea.weighted_score.toFixed(1)}（重み付き）`,
     );
     lines.push('');
+    // Sprint B-3: フェルミ推定を表示。旧行 (fermi_estimate=null) はスキップ。
+    if (idea.fermi_estimate) {
+      lines.push(
+        `**月 ${formatTargetMrr()} 到達**: ${escapeInline(formatFermi(idea.fermi_estimate))}`,
+      );
+      lines.push('');
+    }
     lines.push(`**類似サービス**: ${formatCompetitors(idea.competitors)}`);
     lines.push('');
+    // Sprint B-2: リスク検出が 1 件以上ある場合のみ警告セクションを出す。
+    if (idea.risk_flags.length > 0) {
+      lines.push(`**⚠️ リスク**: ${formatRiskFlags(idea.risk_flags)}`);
+      lines.push('');
+    }
     lines.push(`**元情報**: ${formatSourceLinks(idea.sources)}`);
     lines.push('');
     lines.push('---');
@@ -66,6 +92,31 @@ export function renderMarkdown(ideas: IdeaWithSources[], ctx: RenderContext): st
   });
 
   return lines.join('\n');
+}
+
+// TARGET_MRR (円) を「5 万円」形式に丸めて表示する。
+// 5,000 未満 → "X 千円"、それ以上 → "X 万円" を閾値に、端数は 1 桁。
+function formatTargetMrr(): string {
+  if (TARGET_MRR >= 10000) {
+    return `${(TARGET_MRR / 10000).toLocaleString('en-US')} 万円`;
+  }
+  return `${TARGET_MRR.toLocaleString('en-US')} 円`;
+}
+
+function formatFermi(f: FermiEstimate): string {
+  const unitLabel = FERMI_UNIT_JA[f.unit_type];
+  const price = f.unit_price.toLocaleString('en-US');
+  // mrr_formula が空/崩れていた場合の fallback として "unit_type X 円 (mrr_formula)" 形式で出す
+  return `${unitLabel} ${price} 円 — ${f.mrr_formula}`;
+}
+
+function formatRiskFlags(flags: RiskFlag[]): string {
+  return flags
+    .map((f) => {
+      const sev = RISK_SEVERITY_JA[f.severity];
+      return `${sev} ${escapeInline(f.kind)}: ${escapeInline(f.reason)}`;
+    })
+    .join(' / ');
 }
 
 function formatCompetitors(competitors: IdeaWithSources['competitors']): string {
