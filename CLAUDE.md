@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## プロジェクト概要
 
-IdeaRadar Personal — 個人用途のアイデア発掘ツール。詳細な製品仕様・スプリント定義・完了基準は `SPEC.md` が source of truth。機能追加や仕様変更を行う際は必ず先に `SPEC.md` を読むこと。
+IdeaRadar Personal — 個人用途のアイデア発掘ツール。詳細な製品仕様・現行パイプライン・次スプリント定義は `SPEC.md` が source of truth。機能追加や仕様変更を行う際は必ず先に `SPEC.md` を読むこと。
+
+完了済みスプリントの完了基準や設計判断は `docs/sprints/` に切り出している（SPEC.md から link されている）。過去の実装意図を追うときはそちらを参照する。未着手スプリントの詳細は SPEC.md 本体に残す運用。
 
 ## 常用コマンド
 
