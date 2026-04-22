@@ -304,9 +304,14 @@ function buildTavilyQueries(c: RoleTaggedCandidate): string[] {
   const ja = jaParts.join(' ');
   if (ja.length > 0) queries.push(ja);
 
-  // 機能語: what の先頭 60 文字から「〜する」「〜できる」を削って短縮。
-  // LLM パースは入れず、ヒューリスティックで 1-2 語だけ抜き出す軽量処理。
-  const featureSeed = c.what.slice(0, 60).replace(/[。\.].*$/, '').trim();
+  // 機能語: what の先頭 60 文字 → 句点で打ち切り → 末尾の「〜する/〜できる/〜したい」
+  // と残り助詞を軽く削って名詞寄りのフレーズを残す。LLM パースは入れずヒューリスティック運用。
+  // title と同一になった場合は 3 本目を発行しない (2 本運用にフォールバック)。
+  const firstSentence = c.what.slice(0, 60).replace(/[。\.].*$/, '').trim();
+  const featureSeed = firstSentence
+    .replace(/(できる|する|したい)(機能|こと|ツール|アプリ)?$/u, '')
+    .replace(/[をがはにで]$/u, '')
+    .trim();
   if (featureSeed.length > 0 && featureSeed !== c.title) {
     queries.push(`${featureSeed} ${CATEGORY_EN[c.category]}`.trim());
   }

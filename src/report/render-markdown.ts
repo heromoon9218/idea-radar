@@ -106,7 +106,7 @@ function formatTargetMrr(): string {
 function formatFermi(f: FermiEstimate): string {
   const unitLabel = FERMI_UNIT_JA[f.unit_type];
   const price = f.unit_price.toLocaleString('en-US');
-  // mrr_formula が空/崩れていた場合の fallback として "unit_type X 円 (mrr_formula)" 形式で出す
+  // mrr_formula は FermiEstimateSchema 側で min(1) 保証済みなので fallback は不要。
   return `${unitLabel} ${price} 円 — ${f.mrr_formula}`;
 }
 
