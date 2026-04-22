@@ -79,6 +79,11 @@ const DRAFT_CONCURRENCY = 1;
 // 10 req/バッチを数秒間隔で叩く保険として 300ms の最小間隔を置く。
 const SEARCH_MIN_INTERVAL_MS = 300;
 
+// Sprint B-4: 1 candidate あたり最大クエリ数。
+// 無料枠は 1,000 req/月なので SONNET_TOP_N (10) × MAX_QUERIES_PER_CANDIDATE (3) × 30 日 = 900 req/月 が上限。
+// 引き上げる場合は月間 req 数を再計算し、有料プラン移行 or TOP_N 削減が必要になる。
+const MAX_QUERIES_PER_CANDIDATE = 3;
+
 const CATEGORY_EN: Record<IdeaCategory, string> = {
   'dev-tool': 'developer tool',
   productivity: 'productivity app',
@@ -281,12 +286,11 @@ function dedupeCandidates(
   return Array.from(byKey.values());
 }
 
-// Sprint B-4: candidate 1 件に対して 2-3 本のクエリを作る。
+// Sprint B-4: candidate 1 件に対して最大 MAX_QUERIES_PER_CANDIDATE 本のクエリを作る。
 // - 英語: title + category (現行クエリ、英語圏競合を拾う)
 // - 日本語: title + "競合" 等、日本語カテゴリ併記 (日本市場の類似サービス)
 // - 機能語: what から主要な機能/動詞フレーズを短く抜き出して英語化
 //   (抽出が難しい場合はスキップして 2 本運用)
-// 最大 3 本で、Top 10 × 3 = 30 req/日 = 900 req/月 の試算。Tavily 無料枠 1000/月 内。
 function buildTavilyQueries(c: RoleTaggedCandidate): string[] {
   const queries: string[] = [];
   const en = `${c.title} ${CATEGORY_EN[c.category]}`.trim();
@@ -307,8 +311,7 @@ function buildTavilyQueries(c: RoleTaggedCandidate): string[] {
     queries.push(`${featureSeed} ${CATEGORY_EN[c.category]}`.trim());
   }
 
-  // 最大 3 本に制限
-  return queries.slice(0, 3);
+  return queries.slice(0, MAX_QUERIES_PER_CANDIDATE);
 }
 
 async function scoreTopCandidates(
@@ -380,7 +383,7 @@ async function scoreTopCandidates(
         band: bandConfig.band,
         targetMrr: bandConfig.targetMrr,
       }),
-    ]).then((all) => all as [PromiseSettledResult<RiskFlag[]>, PromiseSettledResult<Awaited<ReturnType<typeof critiqueAndRescore>>>]);
+    ]);
 
     const risk_flags: RiskFlag[] =
       riskSettled.status === 'fulfilled' ? riskSettled.value : [];
@@ -470,7 +473,10 @@ function toIdeaRow(s: ScoredWithWeight): Record<string, unknown> {
     weighted_score: s.weighted_score,
     competitors: s.competitors,
     source_signal_ids: s.source_signal_ids,
-    // Sprint B
+    // Sprint B:
+    //   fermi_estimate    = Markdown に「月 5 万円到達: ...」で表示 (render-markdown.ts)
+    //   risk_flags        = Markdown に「⚠️ リスク: ...」で表示 (render-markdown.ts)
+    //   devils_advocate   = DB 内の audit trail 専用。deliver には出さず、手動 SQL / 将来の振り返り用途
     fermi_estimate: s.fermi_estimate,
     risk_flags: s.risk_flags,
     devils_advocate: s.devils_advocate,

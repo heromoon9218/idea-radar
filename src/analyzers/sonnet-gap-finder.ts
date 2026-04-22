@@ -3,18 +3,19 @@
 // ハッカソンでいう「既にある物を別業界に持ち込むタイプ」のメンバー。
 
 import { callParsed } from '../lib/anthropic.js';
+import { SONNET_MODEL } from '../lib/models.js';
 import {
   formatDemandSummaryForPrompt,
   type DemandSummary,
 } from './demand-summary.js';
+import { finalizeDraftCandidates } from './draft-filter.js';
 import {
-  RoleIdeaOutputSchema,
+  DraftOutputSchema,
   type GapCandidate,
   type HaikuIdeaCandidate,
   type HaikuSignalInput,
 } from '../types.js';
 
-export const SONNET_MODEL = 'claude-sonnet-4-6';
 const SONNET_MAX_TOKENS = 3072;
 
 const GAP_FINDER_SYSTEM = `あなたは個人開発アイデア発掘ハッカソンの「隙間発見者」です。
@@ -109,18 +110,20 @@ function buildUserPrompt({ candidate, signalsById, demandSummary }: InputArgs): 
 export async function draftFromGapCandidate(
   args: InputArgs,
 ): Promise<HaikuIdeaCandidate[]> {
+  const logPrefix = `[sonnet gap_finder angle=${args.candidate.angle}]`;
   const parsed = await callParsed({
     model: SONNET_MODEL,
     system: GAP_FINDER_SYSTEM,
     user: buildUserPrompt(args),
-    schema: RoleIdeaOutputSchema,
+    schema: DraftOutputSchema,
     maxTokens: SONNET_MAX_TOKENS,
-    logPrefix: `[sonnet gap_finder angle=${args.candidate.angle}]`,
+    logPrefix,
     cacheSystem: true,
   });
 
-  return parsed.candidates.map((c) => ({
-    ...c,
-    source_signal_ids: args.candidate.signal_ids,
-  }));
+  return finalizeDraftCandidates({
+    candidates: parsed.candidates,
+    overrideSignalIds: args.candidate.signal_ids,
+    logPrefix,
+  });
 }

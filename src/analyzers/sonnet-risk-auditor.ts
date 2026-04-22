@@ -8,13 +8,13 @@
 // ユーザーに判断材料を渡すことが目的で、自動判定で落とさない。
 
 import { callParsed } from '../lib/anthropic.js';
+import { SONNET_MODEL } from '../lib/models.js';
 import {
   RiskAuditOutputSchema,
   type HaikuIdeaCandidate,
   type RiskFlag,
 } from '../types.js';
 
-export const SONNET_MODEL = 'claude-sonnet-4-6';
 const SONNET_MAX_TOKENS = 1024;
 
 const RISK_AUDITOR_SYSTEM = `あなたは個人開発アイデアの「赤旗スキャナ」です。

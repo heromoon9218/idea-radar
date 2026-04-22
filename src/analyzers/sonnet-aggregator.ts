@@ -2,18 +2,19 @@
 // ハッカソンでいう「複数人の意見を整理して本質を抜き出すタイプ」のメンバー。
 
 import { callParsed } from '../lib/anthropic.js';
+import { SONNET_MODEL } from '../lib/models.js';
 import {
   formatDemandSummaryForPrompt,
   type DemandSummary,
 } from './demand-summary.js';
+import { finalizeDraftCandidates } from './draft-filter.js';
 import {
-  RoleIdeaOutputSchema,
+  DraftOutputSchema,
   type AggregatorBundle,
   type HaikuIdeaCandidate,
   type HaikuSignalInput,
 } from '../types.js';
 
-export const SONNET_MODEL = 'claude-sonnet-4-6';
 const SONNET_MAX_TOKENS = 3072;
 
 const AGGREGATOR_SYSTEM = `あなたは個人開発アイデア発掘ハッカソンの「集約者」です。
@@ -98,20 +99,22 @@ function buildUserPrompt({ bundle, signalsById, demandSummary }: InputArgs): str
 export async function draftFromAggregatorBundle(
   args: InputArgs,
 ): Promise<HaikuIdeaCandidate[]> {
+  const logPrefix = `[sonnet aggregator theme="${args.bundle.theme.slice(0, 30)}"]`;
   const parsed = await callParsed({
     model: SONNET_MODEL,
     system: AGGREGATOR_SYSTEM,
     user: buildUserPrompt(args),
-    schema: RoleIdeaOutputSchema,
+    schema: DraftOutputSchema,
     maxTokens: SONNET_MAX_TOKENS,
-    logPrefix: `[sonnet aggregator theme="${args.bundle.theme.slice(0, 30)}"]`,
+    logPrefix,
     // 同役割内で複数バンドル処理するときに system が使い回されるので cache を効かせる
     cacheSystem: true,
   });
 
-  // source_signal_ids は元の bundle.signal_ids で上書き保証
-  return parsed.candidates.map((c) => ({
-    ...c,
-    source_signal_ids: args.bundle.signal_ids,
-  }));
+  // fermi_estimate 欠落アイデアは filter out、source_signal_ids は bundle.signal_ids で上書き保証
+  return finalizeDraftCandidates({
+    candidates: parsed.candidates,
+    overrideSignalIds: args.bundle.signal_ids,
+    logPrefix,
+  });
 }

@@ -131,10 +131,21 @@ export const HaikuIdeaCandidateSchema = z.object({
 });
 export type HaikuIdeaCandidate = z.infer<typeof HaikuIdeaCandidateSchema>;
 
-export const RoleIdeaOutputSchema = z.object({
-  candidates: z.array(HaikuIdeaCandidateSchema),
+// drafter が LLM 出力を受ける際の緩スキーマ。
+// HaikuIdeaCandidateSchema との差分は fermi_estimate を optional にしていること。
+// 狙い: LLM が個別アイデアで fermi_estimate を付け忘れた場合に、バンドル全体が zod parse 失敗で
+//       ロスするのを避ける。drafter 側で欠落アイデアだけ warn + filter out し、健全な候補は通す。
+// 下流 (analyze.ts) では fermi_estimate 必須の HaikuIdeaCandidate を期待するので、
+// drafter が戻り値を返す前に filter すること (analyzers/draft-filter.ts 参照)。
+export const DraftCandidateSchema = HaikuIdeaCandidateSchema.extend({
+  fermi_estimate: FermiEstimateSchema.optional(),
 });
-export type RoleIdeaOutput = z.infer<typeof RoleIdeaOutputSchema>;
+export type DraftCandidate = z.infer<typeof DraftCandidateSchema>;
+
+export const DraftOutputSchema = z.object({
+  candidates: z.array(DraftCandidateSchema),
+});
+export type DraftOutput = z.infer<typeof DraftOutputSchema>;
 
 // 3 役割の出力をマージした中間表現 (analyze 側で使う)
 export interface RoleTaggedCandidate extends HaikuIdeaCandidate {
@@ -178,7 +189,9 @@ export const DevilsAdvocateOutputSchema = z.object({
 });
 export type DevilsAdvocateOutput = z.infer<typeof DevilsAdvocateOutputSchema>;
 
-// DB 保持用の ideas.devils_advocate jsonb 構造 (初回スコアと却下理由を audit trail として残す)
+// DB 保持用の ideas.devils_advocate jsonb 構造 (初回スコアと却下理由を audit trail として残す)。
+// 運用方針: この jsonb は DB 内のレビュー用途 (手動 SQL / 将来の振り返り UI) 専用で、
+// deliver (render-markdown) では表示しない。Markdown に出るのは rescore 後の 3 軸スコアのみ。
 export const DevilsAdvocatePersistedSchema = z.object({
   rejection_reasons: z.array(z.string()),
   verdict: z.string(),

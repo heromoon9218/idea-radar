@@ -2,18 +2,19 @@
 // ハッカソンでいう「A と B を結びつけて面白い組み合わせを生むタイプ」のメンバー。
 
 import { callParsed } from '../lib/anthropic.js';
+import { SONNET_MODEL } from '../lib/models.js';
 import {
   formatDemandSummaryForPrompt,
   type DemandSummary,
 } from './demand-summary.js';
+import { finalizeDraftCandidates } from './draft-filter.js';
 import {
-  RoleIdeaOutputSchema,
+  DraftOutputSchema,
   type CombinatorPair,
   type HaikuIdeaCandidate,
   type HaikuSignalInput,
 } from '../types.js';
 
-export const SONNET_MODEL = 'claude-sonnet-4-6';
 const SONNET_MAX_TOKENS = 3072;
 
 const COMBINATOR_SYSTEM = `あなたは個人開発アイデア発掘ハッカソンの「結合者」です。
@@ -170,19 +171,21 @@ export async function draftFromCombinatorPair(
   args: InputArgs,
 ): Promise<HaikuIdeaCandidate[]> {
   const allIds = [...args.pair.pain_signal_ids, ...args.pair.info_signal_ids];
+  const logPrefix = `[sonnet combinator angle="${args.pair.angle.slice(0, 30)}"]`;
 
   const parsed = await callParsed({
     model: SONNET_MODEL,
     system: COMBINATOR_SYSTEM,
     user: buildUserPrompt(args),
-    schema: RoleIdeaOutputSchema,
+    schema: DraftOutputSchema,
     maxTokens: SONNET_MAX_TOKENS,
-    logPrefix: `[sonnet combinator angle="${args.pair.angle.slice(0, 30)}"]`,
+    logPrefix,
     cacheSystem: true,
   });
 
-  return parsed.candidates.map((c) => ({
-    ...c,
-    source_signal_ids: allIds,
-  }));
+  return finalizeDraftCandidates({
+    candidates: parsed.candidates,
+    overrideSignalIds: allIds,
+    logPrefix,
+  });
 }

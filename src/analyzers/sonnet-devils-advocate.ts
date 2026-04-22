@@ -11,13 +11,13 @@
 
 import { callParsed } from '../lib/anthropic.js';
 import type { GoalBand } from '../lib/goal-band.js';
+import { SONNET_MODEL } from '../lib/models.js';
 import {
   DevilsAdvocateOutputSchema,
   type DevilsAdvocateOutput,
   type SonnetScoredIdea,
 } from '../types.js';
 
-export const SONNET_MODEL = 'claude-sonnet-4-6';
 const SONNET_MAX_TOKENS = 1536;
 
 const DEVILS_ADVOCATE_SYSTEM_BASE = `あなたは個人開発アイデアの「反対尋問官 (Devil's advocate)」です。
