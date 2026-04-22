@@ -478,6 +478,9 @@ function toIdeaRow(s: ScoredWithWeight): Record<string, unknown> {
     weighted_score: s.weighted_score,
     competitors: s.competitors,
     source_signal_ids: s.source_signal_ids,
+    // role は DB 内の audit trail 専用 (どの drafter 役割が生んだアイデアかを後追跡するため)。
+    // deliver には出さない。
+    role: s.role,
     // Sprint B:
     //   fermi_estimate    = Markdown に「月 5 万円到達: ...」で表示 (render-markdown.ts)
     //   risk_flags        = Markdown に「⚠️ リスク: ...」で表示 (render-markdown.ts)
