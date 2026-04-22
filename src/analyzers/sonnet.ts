@@ -3,6 +3,7 @@
 
 import { callParsed } from '../lib/anthropic.js';
 import type { GoalBand } from '../lib/goal-band.js';
+import { SONNET_MODEL } from '../lib/models.js';
 import type { TavilySearchResult } from '../lib/tavily.js';
 import {
   SonnetScoredIdeaSchema,
@@ -10,7 +11,6 @@ import {
   type SonnetScoredIdea,
 } from '../types.js';
 
-export const SONNET_MODEL = 'claude-sonnet-4-6';
 const SONNET_MAX_TOKENS = 2048;
 
 // Tavily 検索の状態。competition_score の採点抑制ルールで使う。

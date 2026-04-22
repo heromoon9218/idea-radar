@@ -13,6 +13,7 @@
 // - 無効な signal_id は Haiku 出力側から除外する。
 
 import { callParsed } from '../lib/anthropic.js';
+import { HAIKU_MODEL } from '../lib/models.js';
 import {
   HaikuClusterOutputSchema,
   type HaikuClusterOutput,
@@ -22,7 +23,6 @@ import {
   type GapCandidate,
 } from '../types.js';
 
-export const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
 // 1 回で受け渡しできる上限。現状の 300-500 signals/日なら 1 回で収まる想定。
 export const HAIKU_MAX_SIGNALS = 500;
 // 出力は 3 種類の配列で、合計 30-60 個程度を想定。余裕を持って 8192 token。

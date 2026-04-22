@@ -1,11 +1,16 @@
-// 日次バッチの分析パイプライン:
+// 日次バッチの分析パイプライン (Sprint B 反映版):
 //   1. raw_signals (未処理 / 直近 24h) を取得
 //   2. Haiku クラスタリング: aggregator_bundles (≥3) / combinator_pairs (≥2) / gap_candidates (≥1)
 //   3. Sonnet × 3 役割並列: 集約者 / 結合者 / 隙間発見者 がそれぞれアイデアを起草
-//      (各役割内は DRAFT_CONCURRENCY で同時実行数を制限)
+//      (各役割内は DRAFT_CONCURRENCY で同時実行数を制限、B-3 で fermi_estimate を必須化)
 //   4. 合流 → 役割間で title+category 一致するアイデアを dedup
-//   5. raw_score DESC で Top 10 → Tavily 検索 + Sonnet 3 軸スコアリング
-//   6. Top 5 を ideas に insert、signals を processed=true 更新
+//   5. raw_score DESC で Top 10 → 1 件ずつ:
+//        a. Tavily 並列検索 (英語 / 日本語 / 機能語の最大 3 クエリ union) [B-4]
+//        b. Sonnet 3 軸スコアリング (初回)
+//        c. 赤旗スキャン (risk_auditor) + Devil's advocate 2-pass 再スコア を Promise.all [B-1/B-2]
+//        d. 再スコアを採用、reasoning は devils_advocate jsonb へ保持
+//   6. tech_score 足切り → weighted_score DESC で Top 5 を ideas に insert
+//   7. signals を processed=true 更新
 //
 // 3 役割アプローチの意図: 「ハッカソンで 3 人が集まってブレストする」発想で
 // 異なる視点 (複数シグナル集約 / 痛み×技術掛け合わせ / 既存プロダクトの隙間) から
@@ -17,6 +22,8 @@ import { clusterSignals } from './analyzers/haiku.js';
 import { draftFromAggregatorBundle } from './analyzers/sonnet-aggregator.js';
 import { draftFromCombinatorPair } from './analyzers/sonnet-combinator.js';
 import { draftFromGapCandidate } from './analyzers/sonnet-gap-finder.js';
+import { auditRisks } from './analyzers/sonnet-risk-auditor.js';
+import { critiqueAndRescore } from './analyzers/sonnet-devils-advocate.js';
 import {
   buildDemandSummary,
   logLineDemandSummary,
@@ -30,15 +37,18 @@ import {
   TECH_SCORE_MIN,
   type BandConfig,
 } from './lib/goal-band.js';
-import { tavilySearch, type TavilySearchResult } from './lib/tavily.js';
+import { searchParallel, type TavilySearchResult } from './lib/tavily.js';
 import {
   HaikuSignalInputSchema,
   HnStoryTypeSchema,
   SourceTypeSchema,
+  type DevilsAdvocatePersisted,
+  type FermiEstimate,
   type HaikuIdeaCandidate,
   type HaikuSignalInput,
   type IdeaCategory,
   type IdeaRole,
+  type RiskFlag,
   type RoleTaggedCandidate,
   type SonnetScoredIdea,
   type SourceType,
@@ -69,11 +79,25 @@ const DRAFT_CONCURRENCY = 1;
 // 10 req/バッチを数秒間隔で叩く保険として 300ms の最小間隔を置く。
 const SEARCH_MIN_INTERVAL_MS = 300;
 
+// Sprint B-4: 1 candidate あたり最大クエリ数。
+// 無料枠は 1,000 req/月なので SONNET_TOP_N (10) × MAX_QUERIES_PER_CANDIDATE (3) × 30 日 = 900 req/月 が上限。
+// 引き上げる場合は月間 req 数を再計算し、有料プラン移行 or TOP_N 削減が必要になる。
+const MAX_QUERIES_PER_CANDIDATE = 3;
+
 const CATEGORY_EN: Record<IdeaCategory, string> = {
   'dev-tool': 'developer tool',
   productivity: 'productivity app',
   saas: 'saas',
   ai: 'ai tool',
+  other: '',
+};
+
+// 日本語カテゴリ名 (Tavily 日本語クエリ用)。英語よりも日本市場の類似サービスを拾いやすい。
+const CATEGORY_JA_FOR_QUERY: Record<IdeaCategory, string> = {
+  'dev-tool': '開発者向けツール',
+  productivity: '生産性',
+  saas: 'SaaS',
+  ai: 'AI',
   other: '',
 };
 
@@ -84,6 +108,9 @@ function sleep(ms: number): Promise<void> {
 interface ScoredWithWeight extends SonnetScoredIdea {
   role: IdeaRole;
   weighted_score: number;
+  fermi_estimate: FermiEstimate;
+  risk_flags: RiskFlag[];
+  devils_advocate: DevilsAdvocatePersisted;
 }
 
 interface SignalRow {
@@ -259,6 +286,39 @@ function dedupeCandidates(
   return Array.from(byKey.values());
 }
 
+// Sprint B-4: candidate 1 件に対して最大 MAX_QUERIES_PER_CANDIDATE 本のクエリを作る。
+// - 英語: title + category (現行クエリ、英語圏競合を拾う)
+// - 日本語: title + "競合" 等、日本語カテゴリ併記 (日本市場の類似サービス)
+// - 機能語: what から主要な機能/動詞フレーズを短く抜き出して英語化
+//   (抽出が難しい場合はスキップして 2 本運用)
+function buildTavilyQueries(c: RoleTaggedCandidate): string[] {
+  const queries: string[] = [];
+  const en = `${c.title} ${CATEGORY_EN[c.category]}`.trim();
+  if (en.length > 0) queries.push(en);
+
+  // 日本語クエリは title をそのまま使い、カテゴリ日本語名 + "類似サービス" を添える。
+  // title が既に日本語でも英語でも Tavily は言語自動判定するので害はない。
+  const jaCategory = CATEGORY_JA_FOR_QUERY[c.category];
+  const jaParts = [c.title, jaCategory, '類似サービス']
+    .filter((s) => s && s.length > 0);
+  const ja = jaParts.join(' ');
+  if (ja.length > 0) queries.push(ja);
+
+  // 機能語: what の先頭 60 文字 → 句点で打ち切り → 末尾の「〜する/〜できる/〜したい」
+  // と残り助詞を軽く削って名詞寄りのフレーズを残す。LLM パースは入れずヒューリスティック運用。
+  // title と同一になった場合は 3 本目を発行しない (2 本運用にフォールバック)。
+  const firstSentence = c.what.slice(0, 60).replace(/[。\.].*$/, '').trim();
+  const featureSeed = firstSentence
+    .replace(/(できる|する|したい)(機能|こと|ツール|アプリ)?$/u, '')
+    .replace(/[をがはにで]$/u, '')
+    .trim();
+  if (featureSeed.length > 0 && featureSeed !== c.title) {
+    queries.push(`${featureSeed} ${CATEGORY_EN[c.category]}`.trim());
+  }
+
+  return queries.slice(0, MAX_QUERIES_PER_CANDIDATE);
+}
+
 async function scoreTopCandidates(
   candidates: RoleTaggedCandidate[],
   bandConfig: BandConfig,
@@ -285,35 +345,121 @@ async function scoreTopCandidates(
     const wait = lastSearchAt + SEARCH_MIN_INTERVAL_MS - Date.now();
     if (wait > 0) await sleep(wait);
 
+    // Sprint B-4: 2-3 本並列検索で日本語競合も拾う。
+    const queries = buildTavilyQueries(c);
     let hits: TavilySearchResult[] = [];
     let status: TavilyStatus = 'ok';
     try {
-      const q = `${c.title} ${CATEGORY_EN[c.category]}`.trim();
-      hits = await tavilySearch(q, 5);
-      status = hits.length === 0 ? 'empty' : 'ok';
-      console.log(`[tavily] q="${q}" hits=${hits.length} status=${status}`);
+      const parallel = await searchParallel(queries, 5, 8);
+      hits = parallel.results;
+      status = parallel.status;
+      console.log(
+        `[tavily] queries=${parallel.queriesAttempted} failed=${parallel.queriesFailed} hits=${hits.length} status=${status} title="${c.title.slice(0, 40)}"`,
+      );
     } catch (err) {
       status = 'failed';
       console.warn(
-        `[tavily] failed for "${c.title}" status=failed:`,
+        `[tavily] parallel unexpected error for "${c.title}" status=failed:`,
         err instanceof Error ? err.message : err,
       );
     }
     lastSearchAt = Date.now();
 
+    let initial: SonnetScoredIdea;
     try {
-      const result = await scoreIdea(c, hits, status, {
+      initial = await scoreIdea(c, hits, status, {
         band: bandConfig.band,
         targetMrr: bandConfig.targetMrr,
       });
-      const weighted_score = computeWeightedScore(result, bandConfig.weights);
-      scored.push({ ...result, role: c.role, weighted_score });
     } catch (err) {
       console.error(
         `[analyze] sonnet score failed for "${c.title}":`,
         err instanceof Error ? err.message : err,
       );
+      continue;
     }
+
+    // Sprint B-1 / B-2: リスク監査 + Devil's advocate 2-pass を並列実行。
+    // いずれも初回スコアに依存するが、互いには独立なので Promise.all で同時発火。
+    // どちらかが失敗しても他方は生かす (allSettled)。
+    const [riskSettled, devilSettled] = await Promise.allSettled([
+      auditRisks({ candidate: initial }),
+      critiqueAndRescore(initial, {
+        band: bandConfig.band,
+        targetMrr: bandConfig.targetMrr,
+      }),
+    ]);
+
+    const risk_flags: RiskFlag[] =
+      riskSettled.status === 'fulfilled' ? riskSettled.value : [];
+    if (riskSettled.status === 'rejected') {
+      console.warn(
+        `[analyze] risk_audit failed for "${c.title}":`,
+        riskSettled.reason instanceof Error ? riskSettled.reason.message : riskSettled.reason,
+      );
+    } else {
+      const highCount = risk_flags.filter((f) => f.severity === 'high').length;
+      console.log(
+        `[analyze] risk_flags count=${risk_flags.length} high=${highCount} title="${c.title.slice(0, 40)}"`,
+      );
+    }
+
+    // Devil's advocate が失敗した場合は初回スコアをそのまま採用する (保守動作)
+    let finalMarket = initial.market_score;
+    let finalTech = initial.tech_score;
+    let finalComp = initial.competition_score;
+    let devils_advocate: DevilsAdvocatePersisted = {
+      rejection_reasons: [],
+      verdict: 'devils_advocate 呼び出しが失敗 / スキップされたため初回スコアをそのまま採用',
+      initial_scores: {
+        market: initial.market_score,
+        tech: initial.tech_score,
+        competition: initial.competition_score,
+      },
+    };
+    if (devilSettled.status === 'fulfilled') {
+      const d = devilSettled.value;
+      finalMarket = d.reconsidered_market_score;
+      finalTech = d.reconsidered_tech_score;
+      finalComp = d.reconsidered_competition_score;
+      devils_advocate = {
+        rejection_reasons: d.rejection_reasons,
+        verdict: d.verdict,
+        initial_scores: {
+          market: initial.market_score,
+          tech: initial.tech_score,
+          competition: initial.competition_score,
+        },
+      };
+      const delta =
+        (finalMarket - initial.market_score) +
+        (finalTech - initial.tech_score) +
+        (finalComp - initial.competition_score);
+      console.log(
+        `[analyze] devils_advocate title="${c.title.slice(0, 40)}" reasons=${d.rejection_reasons.length} delta_sum=${delta >= 0 ? '+' : ''}${delta}`,
+      );
+    } else {
+      console.warn(
+        `[analyze] devils_advocate failed for "${c.title}":`,
+        devilSettled.reason instanceof Error ? devilSettled.reason.message : devilSettled.reason,
+      );
+    }
+
+    const final: SonnetScoredIdea = {
+      ...initial,
+      market_score: finalMarket,
+      tech_score: finalTech,
+      competition_score: finalComp,
+    };
+    const weighted_score = computeWeightedScore(final, bandConfig.weights);
+    scored.push({
+      ...final,
+      role: c.role,
+      weighted_score,
+      fermi_estimate: c.fermi_estimate,
+      risk_flags,
+      devils_advocate,
+    });
   }
 
   return scored;
@@ -332,6 +478,16 @@ function toIdeaRow(s: ScoredWithWeight): Record<string, unknown> {
     weighted_score: s.weighted_score,
     competitors: s.competitors,
     source_signal_ids: s.source_signal_ids,
+    // role は DB 内の audit trail 専用 (どの drafter 役割が生んだアイデアかを後追跡するため)。
+    // deliver には出さない。
+    role: s.role,
+    // Sprint B:
+    //   fermi_estimate    = Markdown に「月 5 万円到達: ...」で表示 (render-markdown.ts)
+    //   risk_flags        = Markdown に「⚠️ リスク: ...」で表示 (render-markdown.ts)
+    //   devils_advocate   = DB 内の audit trail 専用。deliver には出さず、手動 SQL / 将来の振り返り用途
+    fermi_estimate: s.fermi_estimate,
+    risk_flags: s.risk_flags,
+    devils_advocate: s.devils_advocate,
   };
 }
 
