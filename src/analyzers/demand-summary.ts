@@ -4,6 +4,13 @@
 //
 // ソース横断で合算しない設計: hatena bkm / zenn likes / HN score / SE vote は意味が違うため
 // ソース別に分けて集計する (合算値は誤読されやすい)。
+//
+// スコアの桁感 (drafter 側での解釈のため):
+//   - hatena bkm:    3 桁なら強、2 桁なら中、1 桁なら弱
+//   - zenn likes:    2 桁なら強、1 桁なら中
+//   - HN score:      3 桁なら強 (HN フロントページ級)、2 桁なら中、1 桁なら弱
+//   - SE score:      2 桁なら強 (サイトによっては 1 桁でも強)、1 桁なら中、0 or 負なら弱
+//   - SE view_count: 4 桁以上で強 (1000+ views)、3 桁で中、2 桁以下で弱
 
 import type { SourceType } from '../types.js';
 

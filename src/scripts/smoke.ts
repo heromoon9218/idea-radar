@@ -56,7 +56,7 @@ async function smokeCollectors(): Promise<void> {
   const collectors: readonly SmokeCollector[] = [
     ['hatena', () => collectHatena(WINDOW_MIN)],
     ['zenn', () => collectZenn(WINDOW_MIN)],
-    ['hackernews', () => collectHackerNews(WINDOW_MIN, { normalTopByScore: 100 })],
+    ['hackernews', () => collectHackerNews(WINDOW_MIN, { normalTopByScore: 30 })],
     ['stackexchange', () => collectStackExchange(WINDOW_MIN)],
   ];
 

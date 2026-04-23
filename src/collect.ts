@@ -11,9 +11,13 @@ import type { RawSignalInput, SourceType } from './types.js';
 const WINDOW_MINUTES = 1450;
 // HN normal (Show/Ask/Launch/Tell プリフィックスなしの通常投稿) は 24h で 400+ 件発生し
 // score 1-2 で埋もれる記事が大半。score 上位 N 件のみ採用してノイズを削る。
-// hatena (~38) + zenn (~100) + HN 非 normal (~75) + HN normal top 100 + stackexchange (~30-60) = 約 340-400 件で、
-// analyze 側の MAX_SIGNALS_PER_BATCH=700 に余裕をもって収まる。
-const HN_NORMAL_TOP_BY_SCORE = 100;
+// Sprint D: Stack Exchange を主要ソースに据えるにあたり、技術系バイアス低減のため 100 → 30 に圧縮。
+// HN score 上位 30 件は概ね score 50+ の質の高い技術議論に絞られる (下位 70 件は埋め草)。
+// 現行 4 ソースの日次件数内訳:
+//   hatena (~38) + zenn (~30) + HN 非 normal (~75) + HN normal top 30 + stackexchange 15 site (~80-150) ≒ 250-350 件
+// 初回 ingest 時は SE の 2 クエリが同時に返るので一時的に ~700-800 件まで伸びる想定。
+// analyze 側の MAX_SIGNALS_PER_BATCH は 1200 に引き上げ済み (src/analyze.ts)。
+const HN_NORMAL_TOP_BY_SCORE = 30;
 
 type CollectorFn = () => Promise<RawSignalInput[]>;
 

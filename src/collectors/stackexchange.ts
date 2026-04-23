@@ -1,47 +1,75 @@
 // Stack Exchange API 経由で非技術系の生活ペイン質問を収集する。
-// 対象サイト: lifehacks / parenting / money (Personal Finance & Money)
-//   - 非技術 SE サイトはいずれも「生活の困りごと」の純度が高く、
-//     score / view_count / answer_count の定量メタで demand-summary が機能する。
+// 本ツールの**主要ソース**。技術系 3 ソース (はてブ / Zenn / HN) の「自作できる・無料志向」バイアスを
+// 緩和するため、Sprint D で 3 サイト → 15 サイトに拡張した。
+//
+// 対象サイト (15):
+//   lifehacks / parenting / money / workplace / cooking / diy / interpersonal /
+//   travel / pets / gardening / fitness / law / outdoors / expatriates / academia
 //
 // エンドポイント:
 //   GET https://api.stackexchange.com/2.3/questions
-//     ?site={site}&order=desc&sort=votes&pagesize=25
-//     &fromdate={unix_seconds}&filter=withbody
+//     ?site={site}&order=desc&sort={month|hot}&pagesize=50&filter=withbody
 //
-// 設計メモ:
-//   - sort=votes + fromdate=7日前: 過去 7 日以内に作成された質問のうち「投票が集まっている」
-//     ものを優先。sinceMinutes は敢えて無視する (hatena コレクタと同じ設計)。
-//     理由: 非技術 SE サイトは traffic が低く (lifehacks ~1-5q/day, parenting ~2-5q/day,
-//     money ~10-30q/day)、24h 窓 + sort=votes では「投票が集まりきる前」の新着ばかりで
-//     0 件近くなるため。7 日窓に広げることで demand-summary に値する score を持った質問を拾える。
-//     dedup は raw_signals の UNIQUE(source, external_id) に任せる。
-//   - filter=withbody: 質問本文を取得する。これを content に入れて Haiku に渡す。
-//   - quota: 匿名 300 req/day/IP。本コレクタは 3 req/day なのでマージン大。
+// 2 種類のクエリを並走させる:
+//   - sort=month: 過去 30 日で最も投票された質問 (需要が裏取れた classic pain)
+//   - sort=hot:   今まさに活動が集中している質問 (fresh pain / trending)
+//   両方 dedup した上で union。classic と fresh の両面で SE のペインをカバー。
+//
+// quota:
+//   匿名 300 req/day/IP。15 site × 2 query = 30 req/day で 10% 消費。安全マージン大。
 //
 // external_id:
 //   `{site}_{question_id}` 形式。SE 全体で question_id は site 内ユニークなので、
 //   site を prefix に付けて横断ユニークにする。
 //
+// sinceMinutes の扱い:
+//   敢えて無視する (hatena コレクタと同じ設計)。sort=month/hot は API 側で時間窓が組み込まれており、
+//   dedup は raw_signals の UNIQUE(source, external_id) に任せる。
+//   SE サイトの中には traffic が非常に低いもの (lifehacks / fitness / expatriates 等) があり、
+//   24h 窓では 0-1 件になってしまうため。
+//
 // metadata:
-//   - se_site:         サイト識別子 (lifehacks / parenting / money)
-//                      → analyze.ts の toHaikuInputs で Haiku 入力にリフトされる (HN の story_type と同じ扱い)
+//   - se_site:         サイト識別子 (analyze.ts の toHaikuInputs で Haiku 入力にリフトされる)
 //   - question_score:  投票スコア (負値もあり得る)
-//   - view_count:      閲覧数 (demand-summary で痛み強度の proxy として使用)
+//   - view_count:      閲覧数 (demand-summary の痛み強度 proxy)
 //   - answer_count:    回答数
 //   - is_answered:     ベストアンサーが付いているか
-//   - tags:            タグ配列 (任意)
+//   - tags:            タグ配列
 
 import { fetchWithRetry } from '../lib/fetch-retry.js';
 import type { RawSignalInput } from '../types.js';
 
-// 対象サイト。品質を見ながら cooking / workplace / diy / gardening / pets を追加可能。
-const SITES: string[] = ['lifehacks', 'parenting', 'money'];
+// 対象サイト 15 個。カテゴリバランス:
+//   生活全般: lifehacks / diy / cooking / gardening / outdoors
+//   家族・人間関係: parenting / interpersonal / pets
+//   金・仕事・規制: money / workplace / law
+//   身体・ライフスタイル: fitness / travel / expatriates
+//   学習・研究: academia (※ CS 学生が多いのでやや技術寄りだが、研究生活の一般ペインを拾える)
+const SITES: string[] = [
+  'lifehacks',
+  'parenting',
+  'money',
+  'workplace',
+  'cooking',
+  'diy',
+  'interpersonal',
+  'travel',
+  'pets',
+  'gardening',
+  'fitness',
+  'law',
+  'outdoors',
+  'expatriates',
+  'academia',
+];
 
-const PAGE_SIZE = 25;
-// SE サイトは traffic が低く 24h では 0-1 件になるため、投票が集まるだけの時間幅で見る。
-const LOOKBACK_DAYS = 7;
+// 2 種類のクエリを並走させる。sort=month = 過去 30 日最高スコア、sort=hot = 今活動中。
+// union + dedup で classic pain と fresh pain の両面を網羅する。
+const SORTS: readonly ('month' | 'hot')[] = ['month', 'hot'] as const;
+
+const PAGE_SIZE = 50;
 const USER_AGENT = 'idea-radar/0.1.0 (+https://github.com/Hiromu-Konomi/idea-radar)';
-// 本文は長くなり得る (SE は回答付きで 3-5k chars)。Haiku のプロンプト肥大を避けるため
+// 本文は長くなり得る (SE は質問本文だけでも 3-5k chars)。Haiku のプロンプト肥大を避けるため
 // content 側で切り詰める。1500 chars あれば痛みの輪郭は掴める。
 const MAX_CONTENT_CHARS = 1500;
 
@@ -69,7 +97,6 @@ interface SEResponse {
 }
 
 // SE body は HTML (段落タグ + コードブロック + リンク)。タグを雑に剥がして軽量化。
-// エンティティは最低限のみデコードする。
 function stripHtml(html: string | null | undefined): string | null {
   if (!html) return null;
   const withoutTags = html.replace(/<[^>]*>/g, ' ');
@@ -89,88 +116,102 @@ function stripHtml(html: string | null | undefined): string | null {
   return decoded.length > MAX_CONTENT_CHARS ? `${decoded.slice(0, MAX_CONTENT_CHARS)}…` : decoded;
 }
 
-// sinceMinutes は敢えて無視して LOOKBACK_DAYS 固定で取得する (冒頭コメント参照)。
+// 1 (site, sort) 組を取得。失敗は呼び出し側で捕捉。
+async function fetchOne(
+  site: string,
+  sort: 'month' | 'hot',
+): Promise<{ items: SEQuestion[]; quotaRemaining: number | null }> {
+  const params = new URLSearchParams({
+    site,
+    order: 'desc',
+    sort,
+    pagesize: String(PAGE_SIZE),
+    filter: 'withbody',
+  });
+  const feedUrl = `https://api.stackexchange.com/2.3/questions?${params.toString()}`;
+  const res = await fetchWithRetry(
+    feedUrl,
+    { headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' } },
+    {
+      onRetry: ({ attempt, error }) =>
+        console.warn(
+          `[stackexchange] site=${site} sort=${sort} retry ${attempt}:`,
+          error instanceof Error ? error.message : error,
+        ),
+    },
+  );
+  if (!res.ok) {
+    console.error(`[stackexchange] site=${site} sort=${sort} -> HTTP ${res.status}`);
+    return { items: [], quotaRemaining: null };
+  }
+  const body = (await res.json()) as SEResponse;
+  if (body.error_id || body.error_message) {
+    console.error(
+      `[stackexchange] site=${site} sort=${sort} API error ${body.error_id ?? ''}: ${body.error_message ?? ''}`,
+    );
+    return { items: [], quotaRemaining: body.quota_remaining ?? null };
+  }
+  return {
+    items: body.items ?? [],
+    quotaRemaining: typeof body.quota_remaining === 'number' ? body.quota_remaining : null,
+  };
+}
+
+// sinceMinutes は敢えて無視する (冒頭コメント参照)。
 // 呼び出し側 (collect.ts) との引数シグネチャ互換のために受け取るのみ。
 export async function collectStackExchange(_sinceMinutes: number): Promise<RawSignalInput[]> {
-  const fromdate = Math.floor(Date.now() / 1000) - LOOKBACK_DAYS * 24 * 60 * 60;
   const results: RawSignalInput[] = [];
+  const counts: Record<string, number> = {};
+  let lastQuota: number | null = null;
 
+  // (site, sort) の直積を逐次取得。30 req/day 程度で SE のレート制限には余裕がある。
   for (const site of SITES) {
-    const params = new URLSearchParams({
-      site,
-      order: 'desc',
-      sort: 'votes',
-      pagesize: String(PAGE_SIZE),
-      fromdate: String(fromdate),
-      filter: 'withbody',
-    });
-    const feedUrl = `https://api.stackexchange.com/2.3/questions?${params.toString()}`;
-    try {
-      const res = await fetchWithRetry(
-        feedUrl,
-        { headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' } },
-        {
-          onRetry: ({ attempt, error }) =>
-            console.warn(
-              `[stackexchange] site=${site} retry ${attempt}:`,
-              error instanceof Error ? error.message : error,
-            ),
-        },
-      );
-      if (!res.ok) {
-        console.error(`[stackexchange] site=${site} -> HTTP ${res.status}`);
-        continue;
+    for (const sort of SORTS) {
+      try {
+        const { items, quotaRemaining } = await fetchOne(site, sort);
+        if (quotaRemaining !== null) lastQuota = quotaRemaining;
+        for (const q of items) {
+          if (!q.question_id || !q.title || !q.link || !q.creation_date) continue;
+
+          const postedAt = new Date(q.creation_date * 1000);
+          if (isNaN(postedAt.getTime())) continue;
+
+          const externalId = `${site}_${q.question_id}`;
+
+          results.push({
+            source: 'stackexchange',
+            external_id: externalId,
+            url: q.link,
+            title: q.title,
+            content: stripHtml(q.body),
+            author: q.owner?.display_name ?? null,
+            posted_at: postedAt.toISOString(),
+            metadata: {
+              se_site: site,
+              question_score: q.score,
+              view_count: q.view_count,
+              answer_count: q.answer_count,
+              is_answered: q.is_answered,
+              tags: q.tags ?? [],
+            },
+          });
+        }
+        counts[`${site}/${sort}`] = items.length;
+      } catch (err) {
+        console.error(`[stackexchange] site=${site} sort=${sort} failed:`, err);
       }
-
-      const body = (await res.json()) as SEResponse;
-      if (body.error_id || body.error_message) {
-        console.error(
-          `[stackexchange] site=${site} API error ${body.error_id ?? ''}: ${body.error_message ?? ''}`,
-        );
-        continue;
-      }
-      const items = body.items ?? [];
-      if (typeof body.quota_remaining === 'number') {
-        console.log(
-          `[stackexchange] site=${site} fetched=${items.length} quota_remaining=${body.quota_remaining}`,
-        );
-      }
-
-      for (const q of items) {
-        if (!q.question_id || !q.title || !q.link || !q.creation_date) continue;
-        if (q.creation_date < fromdate) continue;
-
-        const postedAt = new Date(q.creation_date * 1000);
-        if (isNaN(postedAt.getTime())) continue;
-
-        const externalId = `${site}_${q.question_id}`;
-
-        results.push({
-          source: 'stackexchange',
-          external_id: externalId,
-          url: q.link,
-          title: q.title,
-          content: stripHtml(q.body),
-          author: q.owner?.display_name ?? null,
-          posted_at: postedAt.toISOString(),
-          metadata: {
-            se_site: site,
-            question_score: q.score,
-            view_count: q.view_count,
-            answer_count: q.answer_count,
-            is_answered: q.is_answered,
-            tags: q.tags ?? [],
-          },
-        });
-      }
-    } catch (err) {
-      console.error(`[stackexchange] site=${site} failed:`, err);
     }
   }
 
-  return dedupByExternalId(results);
+  const deduped = dedupByExternalId(results);
+  console.log(
+    `[stackexchange] raw=${results.length} deduped=${deduped.length} sites=${SITES.length} quota_remaining=${lastQuota ?? 'n/a'}`,
+  );
+  return deduped;
 }
 
+// sort=month と sort=hot の結果には重複が多いので必ず dedup する。
+// また、稀に同 site で同 question_id が複数返ることもあり得るため防衛線として機能する。
 function dedupByExternalId(items: RawSignalInput[]): RawSignalInput[] {
   const seen = new Set<string>();
   const out: RawSignalInput[] = [];

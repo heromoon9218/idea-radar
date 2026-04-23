@@ -55,13 +55,14 @@ import {
 } from './types.js';
 
 const WINDOW_HOURS = 24;
-// 現行 4 ソースの日次件数内訳:
-//   hatena (~38) + zenn (~100) + HN 非 normal (~75) + HN normal top 100 + stackexchange 3 サイト (~30-60)
-//   = 約 340-400 件。Sprint C で note/reddit を stackexchange に入れ替え済み。
-// 上限を 700 に置いているのは、HN normal フィルタの閾値引き上げや SE サイト追加で増える余地を残すため。
+// 現行 4 ソースの日次件数内訳 (Sprint D で SE 主要化 + 技術系圧縮済み):
+//   hatena (~38) + zenn (~30) + HN 非 normal (~75) + HN normal top 30 + stackexchange 15 site (~80-150)
+//   = 定常 ~250-350 件。初回 ingest 時は SE の sort=month/hot 2 クエリ合計で 700-800 件まで伸びる想定。
+// 上限を 1200 に置いているのは、この初回スパイクを取りこぼさず 1 日で処理し切るため
+// (MAX_SIGNALS_PER_BATCH を超えた分は 24h window から外れて永久に未処理になる)。
 // Haiku のコンテキストウィンドウは 200k+ で余裕があり、Sonnet × 3 役割は Top 10 のみがコスト対象なので
 // signal 数増加がコストに線形比例しないため、上限引き上げは安全。
-const MAX_SIGNALS_PER_BATCH = 700;
+const MAX_SIGNALS_PER_BATCH = 1200;
 const SONNET_TOP_N = 10;
 const INSERT_TOP_N = 5;
 
