@@ -12,16 +12,51 @@
 //   新しい signal 優先でトリミングする (fetchUnprocessedSignals が collected_at DESC ソート済み)。
 // - 無効な signal_id は Haiku 出力側から除外する。
 
+import { z } from 'zod';
 import { callParsed } from '../lib/anthropic.js';
 import { HAIKU_MODEL } from '../lib/models.js';
 import {
-  HaikuClusterOutputSchema,
+  CombinatorPairSchema,
   type HaikuClusterOutput,
   type HaikuSignalInput,
   type AggregatorBundle,
   type CombinatorPair,
   type GapCandidate,
 } from '../types.js';
+
+// LLM への JSON Schema ガイダンスと zod パースは共通の schema から生成されるが、
+// Haiku が制約を外れた出力を返した場合 (signal_ids < 3 / angle が enum 外) に
+// バッチ全体を潰さないよう、パース段階は lenient に受け取って filter 関数で正規化・除外する。
+// strict な HaikuClusterOutput 型 (types.ts) を下流に返す契約は維持する。
+const LenientAggregatorBundleSchema = z.object({
+  theme: z.string().min(1),
+  signal_ids: z.array(z.string()).min(1),
+});
+
+const VALID_GAP_ANGLES = [
+  'launch_hn',
+  'show_hn',
+  'paid_service_mention',
+  'niche_transfer',
+  'other',
+] as const;
+type GapAngle = (typeof VALID_GAP_ANGLES)[number];
+const VALID_GAP_ANGLE_SET = new Set<string>(VALID_GAP_ANGLES);
+
+const LenientGapCandidateSchema = z.object({
+  angle: z.string().min(1),
+  hint: z.string().min(1),
+  signal_ids: z.array(z.string()).min(1),
+});
+
+const LenientHaikuClusterOutputSchema = z.object({
+  aggregator_bundles: z.array(LenientAggregatorBundleSchema),
+  combinator_pairs: z.array(CombinatorPairSchema),
+  gap_candidates: z.array(LenientGapCandidateSchema),
+});
+type LenientHaikuClusterOutput = z.infer<typeof LenientHaikuClusterOutputSchema>;
+type LenientAggregatorBundle = LenientHaikuClusterOutput['aggregator_bundles'][number];
+type LenientGapCandidate = LenientHaikuClusterOutput['gap_candidates'][number];
 
 // 1 回で受け渡しできる上限。現状の 300-500 signals/日なら 1 回で収まる想定。
 export const HAIKU_MAX_SIGNALS = 500;
@@ -84,7 +119,7 @@ function buildUserPrompt(signals: HaikuSignalInput[]): string {
 }
 
 function filterAggregator(
-  bundles: AggregatorBundle[],
+  bundles: LenientAggregatorBundle[],
   validIds: Set<string>,
 ): AggregatorBundle[] {
   const out: AggregatorBundle[] = [];
@@ -125,7 +160,7 @@ function filterCombinator(
 }
 
 function filterGap(
-  gaps: GapCandidate[],
+  gaps: LenientGapCandidate[],
   validIds: Set<string>,
 ): GapCandidate[] {
   const out: GapCandidate[] = [];
@@ -137,7 +172,14 @@ function filterGap(
       );
       continue;
     }
-    out.push({ angle: g.angle, hint: g.hint, signal_ids: ids });
+    // Haiku が enum 外の angle (日本語文字列など) を返した場合は "other" に正規化する
+    const angle: GapAngle = VALID_GAP_ANGLE_SET.has(g.angle) ? (g.angle as GapAngle) : 'other';
+    if (angle !== g.angle) {
+      console.warn(
+        `[haiku] normalize gap_candidate.angle: "${g.angle}" → "other" (hint="${g.hint}")`,
+      );
+    }
+    out.push({ angle, hint: g.hint, signal_ids: ids });
   }
   return out;
 }
@@ -163,7 +205,7 @@ export async function clusterSignals(
     model: HAIKU_MODEL,
     system: HAIKU_SYSTEM,
     user: buildUserPrompt(trimmed),
-    schema: HaikuClusterOutputSchema,
+    schema: LenientHaikuClusterOutputSchema,
     maxTokens: HAIKU_MAX_TOKENS,
     logPrefix: '[haiku cluster]',
   });
