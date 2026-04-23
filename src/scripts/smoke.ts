@@ -12,8 +12,7 @@ import 'dotenv/config';
 import { collectHatena } from '../collectors/hatena.js';
 import { collectZenn } from '../collectors/zenn.js';
 import { collectHackerNews } from '../collectors/hackernews.js';
-import { collectNote } from '../collectors/note.js';
-import { collectReddit } from '../collectors/reddit.js';
+import { collectStackExchange } from '../collectors/stackexchange.js';
 import { clusterSignals } from '../analyzers/haiku.js';
 import {
   buildDemandSummary,
@@ -58,8 +57,7 @@ async function smokeCollectors(): Promise<void> {
     ['hatena', () => collectHatena(WINDOW_MIN)],
     ['zenn', () => collectZenn(WINDOW_MIN)],
     ['hackernews', () => collectHackerNews(WINDOW_MIN, { normalTopByScore: 100 })],
-    ['note', () => collectNote(WINDOW_MIN)],
-    ['reddit', () => collectReddit(WINDOW_MIN)],
+    ['stackexchange', () => collectStackExchange(WINDOW_MIN)],
   ];
 
   for (const [name, fn] of collectors) {
@@ -120,6 +118,10 @@ async function smokeAnalyze(): Promise<void> {
         (r.metadata as Record<string, unknown>).story_type,
       );
       if (parsed.success) enriched.hn_story_type = parsed.data;
+    }
+    if (r.source === 'stackexchange' && r.metadata) {
+      const site = (r.metadata as Record<string, unknown>).se_site;
+      if (typeof site === 'string' && site.length > 0) enriched.se_site = site;
     }
     const parsed = HaikuSignalInputSchema.safeParse(enriched);
     if (!parsed.success) {

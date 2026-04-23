@@ -118,7 +118,16 @@ HN の hn_story_type (HN シグナルのみに付与):
 - "launch" → gap_candidates の "launch_hn" に強く振る
 - "show"   → gap_candidates の "show_hn" に強く振る
 - "ask"    → 痛みが具体的な質問なので aggregator または combinator 候補
-- "tell" / "normal" → 痛みが明確な場合のみ拾う`;
+- "tell" / "normal" → 痛みが明確な場合のみ拾う
+
+Stack Exchange の se_site (Stack Exchange シグナルのみに付与):
+- "lifehacks" → 生活ハック (掃除・整理・日用品の工夫) 系の痛み
+- "parenting" → 育児 (乳幼児ケア・教育・家族関係) 系の痛み
+- "money"     → 家計・個人投資・副業・税金・保険 系の痛み
+Stack Exchange の質問は「生活者が具体的に困って人に聞いている」純度が高いため、
+原則として痛みシグナルとして扱い aggregator_bundles か combinator_pairs の pain 側に優先して配置する。
+非技術ドメインなので、技術系シグナル (はてブ / Zenn / HN) と組み合わせると combinator の
+軽量ドメイン投影 (個人 EC / 副業 / 家計支援 など) に素直に乗りやすい。`;
 
 function buildUserPrompt(signals: HaikuSignalInput[]): string {
   return [

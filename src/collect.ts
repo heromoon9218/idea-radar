@@ -3,8 +3,7 @@ import { supabase } from './db/supabase.js';
 import { collectHatena } from './collectors/hatena.js';
 import { collectZenn } from './collectors/zenn.js';
 import { collectHackerNews } from './collectors/hackernews.js';
-import { collectNote } from './collectors/note.js';
-import { collectReddit } from './collectors/reddit.js';
+import { collectStackExchange } from './collectors/stackexchange.js';
 import { RawSignalInputSchema } from './types.js';
 import type { RawSignalInput, SourceType } from './types.js';
 
@@ -12,8 +11,8 @@ import type { RawSignalInput, SourceType } from './types.js';
 const WINDOW_MINUTES = 1450;
 // HN normal (Show/Ask/Launch/Tell プリフィックスなしの通常投稿) は 24h で 400+ 件発生し
 // score 1-2 で埋もれる記事が大半。score 上位 N 件のみ採用してノイズを削る。
-// hatena (~38) + zenn (~100) + HN 非 normal (~75) + HN normal top 100 = 約 313 件で、
-// analyze 側の MAX_SIGNALS_PER_BATCH=500 に収まり取りこぼしが無くなる。
+// hatena (~38) + zenn (~100) + HN 非 normal (~75) + HN normal top 100 + stackexchange (~30-60) = 約 340-400 件で、
+// analyze 側の MAX_SIGNALS_PER_BATCH=700 に余裕をもって収まる。
 const HN_NORMAL_TOP_BY_SCORE = 100;
 
 type CollectorFn = () => Promise<RawSignalInput[]>;
@@ -56,13 +55,9 @@ async function main(): Promise<void> {
       () =>
         collectHackerNews(WINDOW_MINUTES, { normalTopByScore: HN_NORMAL_TOP_BY_SCORE }),
     ],
-    // 軽量ドメイン (クリエイター / 副業 / 個人 EC / 個人投資家 / 自己管理) の痛みを拾うソース。
-    //   note:   複数ハッシュタグ RSS 束ね (~50-150 件)
-    //   reddit: 5 subreddit × 25 件 = 最大 125 件 (stickied / NSFW 除外後やや減る)
-    // 既存 313 件 + note ~100 + reddit ~100 = 約 510 件 になる見込みのため、
-    // analyze 側の MAX_SIGNALS_PER_BATCH は 500 → 700 に引き上げ済み (src/analyze.ts)。
-    ['note', () => collectNote(WINDOW_MINUTES)],
-    ['reddit', () => collectReddit(WINDOW_MINUTES)],
+    // 非技術の生活ペインを拾うソース (lifehacks / parenting / money の 3 サイトを内部で束ねる)。
+    // score / view_count / answer_count を metadata に持つため demand-summary の裏取りが機能する。
+    ['stackexchange', () => collectStackExchange(WINDOW_MINUTES)],
   ];
 
   const outcomes = await Promise.all(

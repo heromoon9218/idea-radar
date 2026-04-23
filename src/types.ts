@@ -4,11 +4,10 @@ export const SourceTypeSchema = z.enum([
   'hatena',
   'zenn',
   'hackernews',
-  // 軽量ドメインの痛みを拾うための非技術系ソース:
-  //   note   = 日本語のクリエイター / 副業 / 投資 / ブロガー 系ハッシュタグ
-  //   reddit = 英語の SMB / サイドハッスル / ハンドメイド EC / 自己管理 系 subreddit
-  'note',
-  'reddit',
+  // 非技術系の生活ペインを拾うためのソース:
+  //   stackexchange = lifehacks / parenting / money (Personal Finance & Money) の 3 サイトを束ねる
+  //                   score / view_count / answer_count の定量メタが取れるため demand-summary と相性が良い
+  'stackexchange',
 ]);
 export type SourceType = z.infer<typeof SourceTypeSchema>;
 
@@ -50,6 +49,10 @@ export const HaikuSignalInputSchema = z.object({
   // HN のみ: タイトル先頭の Show/Ask/Launch/Tell HN 分類。
   // それ以外のソースでは undefined。
   hn_story_type: HnStoryTypeSchema.optional(),
+  // Stack Exchange のみ: どのサイト由来か (lifehacks / parenting / money ...)。
+  // Haiku が「生活ハック系」「育児系」「家計・副業系」で痛みの質を判断できるように渡す。
+  // それ以外のソースでは undefined。
+  se_site: z.string().optional(),
 });
 export type HaikuSignalInput = z.infer<typeof HaikuSignalInputSchema>;
 

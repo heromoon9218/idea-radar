@@ -30,7 +30,7 @@ CI（`.github/workflows/ci.yml`）は PR と push:main で `npm run typecheck` +
 ### ディレクトリ構成（`src/` 配下）
 
 ```
-collectors/   hatena / zenn / hackernews の RSS・API 取得
+collectors/   hatena / zenn / hackernews / stackexchange の RSS・API 取得
 analyzers/    haiku (クラスタリング) / sonnet-aggregator / sonnet-combinator / sonnet-gap-finder (3 役割) / sonnet (3 軸スコア)
 lib/          anthropic / resend / tavily / fetch-retry — 外部 I/O 窓口
 db/           supabase.ts — service role クライアント
@@ -45,7 +45,7 @@ types.ts      zod スキーマ + 型定義の集約
 ```
 collect.yml (UTC 21:00 = JST 06:00)
   → src/collect.ts
-  → 3 ソース (hatena / zenn / hackernews) 並列取得
+  → 4 ソース (hatena / zenn / hackernews / stackexchange) 並列取得
   → raw_signals に UNIQUE(source, external_id) で重複除外 upsert
 
 analyze.yml (UTC 22:00 = JST 07:00、timeout 15min)
@@ -91,10 +91,12 @@ deliver.yml (UTC 22:30 = JST 07:30、analyze から 15min マージン)
 
 Hacker News のタイトル先頭 `Show/Ask/Launch/Tell HN:` は個人開発ネタの金鉱として Haiku クラスタリングで `gap_candidates` (show_hn / launch_hn) に強く振るための優先度シグナル。`hackernews.ts:classifyHnTitle` で分類 → `raw_signals.metadata.story_type` に格納 → `analyze.ts:toHaikuInputs` で `hn_story_type` にリフト → `HAIKU_SYSTEM` プロンプトに判定指針として渡る。新ソース追加時に類似のメタデータを通す必要がある場合、この 3 点を揃えること。
 
+Stack Exchange も同じパターンを踏襲する: `stackexchange.ts` が `metadata.se_site` (lifehacks / parenting / money) を格納 → `analyze.ts:toHaikuInputs` が `se_site` にリフト → `HAIKU_SYSTEM` プロンプトが「生活ハック / 育児 / 家計」系の痛みとしてクラスタリングの判断材料にする。
+
 ### HN normal ノイズフィルタ
 
 `collect.ts` は `collectHackerNews` に `normalTopByScore: 100` を渡す。HN `normal` (Show/Ask/Launch/Tell プリフィックスなしの通常投稿) は 24h で 400+ 件発生し score 1-2 で埋もれる記事が大半なので、HN score 上位 100 件のみ採用してノイズを削る設計。`show` / `ask` / `launch` / `tell` は本数が少なく質も高いので常に全件保持する。
-これにより日次の収集件数は hatena (~38) + zenn (~100) + HN 非 normal (~75) + HN normal top 100 = **約 313 件** に抑えられ、analyze の `MAX_SIGNALS_PER_BATCH=500` に収まって取りこぼし (未処理のまま 24h window から外れて永久に処理されない問題) が発生しない。閾値を触る場合はこの収支を確認すること。
+これにより日次の収集件数は hatena (~38) + zenn (~100) + HN 非 normal (~75) + HN normal top 100 + stackexchange (~30-60) = **約 340-400 件** に抑えられ、analyze の `MAX_SIGNALS_PER_BATCH=700` に余裕をもって収まり取りこぼし (未処理のまま 24h window から外れて永久に処理されない問題) が発生しない。閾値を触る場合はこの収支を確認すること。
 
 ### Prompt caching
 

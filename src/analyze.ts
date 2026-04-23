@@ -55,7 +55,10 @@ import {
 } from './types.js';
 
 const WINDOW_HOURS = 24;
-// Sprint 3 で note / reddit を追加して合計 signals 数が 491 → 将来 550+ になる見込みのため 700 に拡張。
+// 現行 4 ソースの日次件数内訳:
+//   hatena (~38) + zenn (~100) + HN 非 normal (~75) + HN normal top 100 + stackexchange 3 サイト (~30-60)
+//   = 約 340-400 件。Sprint C で note/reddit を stackexchange に入れ替え済み。
+// 上限を 700 に置いているのは、HN normal フィルタの閾値引き上げや SE サイト追加で増える余地を残すため。
 // Haiku のコンテキストウィンドウは 200k+ で余裕があり、Sonnet × 3 役割は Top 10 のみがコスト対象なので
 // signal 数増加がコストに線形比例しないため、上限引き上げは安全。
 const MAX_SIGNALS_PER_BATCH = 700;
@@ -137,6 +140,7 @@ async function fetchUnprocessedSignals(): Promise<SignalRow[]> {
 
 // SignalRow → Haiku 入力形式 (zod でバリデートしてから配列化)。
 // HN の metadata.story_type は Haiku プロンプトで参照させるので hn_story_type に昇格。
+// Stack Exchange の metadata.se_site も同様に se_site に昇格 (サイトごとに痛みの領域が異なるため)。
 // 異常データはログに出してスキップ。
 function toHaikuInputs(rows: SignalRow[]): HaikuSignalInput[] {
   const out: HaikuSignalInput[] = [];
@@ -151,6 +155,10 @@ function toHaikuInputs(rows: SignalRow[]): HaikuSignalInput[] {
     if (r.source === 'hackernews' && r.metadata) {
       const parsed = HnStoryTypeSchema.safeParse(r.metadata.story_type);
       if (parsed.success) enriched.hn_story_type = parsed.data;
+    }
+    if (r.source === 'stackexchange' && r.metadata) {
+      const site = r.metadata.se_site;
+      if (typeof site === 'string' && site.length > 0) enriched.se_site = site;
     }
     const parsed = HaikuSignalInputSchema.safeParse(enriched);
     if (!parsed.success) {
