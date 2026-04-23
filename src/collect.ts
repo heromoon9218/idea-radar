@@ -11,7 +11,7 @@ import type { RawSignalInput, SourceType } from './types.js';
 const WINDOW_MINUTES = 1450;
 // HN normal (Show/Ask/Launch/Tell プリフィックスなしの通常投稿) は 24h で 400+ 件発生し
 // score 1-2 で埋もれる記事が大半。score 上位 N 件のみ採用してノイズを削る。
-// Sprint D: Stack Exchange を主要ソースに据えるにあたり、技術系バイアス低減のため 100 → 30 に圧縮。
+// Stack Exchange を主要ソースに据えるにあたり、技術系バイアス低減のため 100 → 30 に圧縮。
 // HN score 上位 30 件は概ね score 50+ の質の高い技術議論に絞られる (下位 70 件は埋め草)。
 // 現行 4 ソースの日次件数内訳:
 //   hatena (~38) + zenn (~30) + HN 非 normal (~75) + HN normal top 30 + stackexchange 15 site (~80-150) ≒ 250-350 件

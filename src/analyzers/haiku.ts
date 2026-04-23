@@ -68,7 +68,7 @@ type LenientHaikuClusterOutput = z.infer<typeof LenientHaikuClusterOutputSchema>
 type LenientAggregatorBundle = LenientHaikuClusterOutput['aggregator_bundles'][number];
 type LenientGapCandidate = LenientHaikuClusterOutput['gap_candidates'][number];
 
-// 1 回で受け渡しできる上限。Sprint D で SE 主要化により最大 800 件程度のスパイクが来るため 700 に拡張。
+// 1 回で受け渡しできる上限。SE 主要化の初回 ingest で最大 800 件程度のスパイクが来るため 700 に拡張。
 // Haiku 4 の input は 200k tokens。1 signal あたり serialize 後 ~200-300 tokens 平均なので
 // 700 signals ≒ 140-210k tokens で収まる想定。
 export const HAIKU_MAX_SIGNALS = 700;

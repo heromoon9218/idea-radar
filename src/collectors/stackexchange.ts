@@ -1,6 +1,6 @@
 // Stack Exchange API 経由で非技術系の生活ペイン質問を収集する。
 // 本ツールの**主要ソース**。技術系 3 ソース (はてブ / Zenn / HN) の「自作できる・無料志向」バイアスを
-// 緩和するため、Sprint D で 3 サイト → 15 サイトに拡張した。
+// 緩和するため 15 サイトに拡張して主要ソースに据えている (3 サイトから拡張時の経緯は git log 参照)。
 //
 // 対象サイト (15):
 //   lifehacks / parenting / money / workplace / cooking / diy / interpersonal /

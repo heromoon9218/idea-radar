@@ -55,7 +55,7 @@ import {
 } from './types.js';
 
 const WINDOW_HOURS = 24;
-// 現行 4 ソースの日次件数内訳 (Sprint D で SE 主要化 + 技術系圧縮済み):
+// 現行 4 ソースの日次件数内訳 (SE 主要化 + 技術系圧縮後):
 //   hatena (~38) + zenn (~30) + HN 非 normal (~75) + HN normal top 30 + stackexchange 15 site (~80-150)
 //   = 定常 ~250-350 件。初回 ingest 時は SE の sort=month/hot 2 クエリ合計で 700-800 件まで伸びる想定。
 // 上限を 1200 に置いているのは、この初回スパイクを取りこぼさず 1 日で処理し切るため

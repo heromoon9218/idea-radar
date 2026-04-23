@@ -16,8 +16,8 @@
 
 技術系 3 ソース (HN / Zenn / はてブ) だけでは読者層が開発者中心で、「自作できる・無料志向」の層に偏り DevTool / OSS 的アイデアに流されて目的から外れやすい。この偏りの緩和策：
 
-- **Stack Exchange 15 サイトを主要ソースに据える** (Sprint D 実装): 非技術 15 サイト (lifehacks / parenting / money / workplace / cooking / diy / interpersonal / travel / pets / gardening / fitness / law / outdoors / expatriates / academia) を **sort=month + sort=hot の 2 クエリ並走** で収集。classic pain と fresh pain の両面を網羅し、score / view_count / answer_count で demand-summary の裏取りも機能する
-- **技術系ソースの圧縮** (Sprint D 実装): Zenn count を 100 → 30、HN normal_top_by_score を 100 → 30 に圧縮。技術系バイアスを相対的に下げ、SE を主軸に据える
+- **Stack Exchange 15 サイトを主要ソースに据える**: 非技術 15 サイト (lifehacks / parenting / money / workplace / cooking / diy / interpersonal / travel / pets / gardening / fitness / law / outdoors / expatriates / academia) を **sort=month + sort=hot の 2 クエリ並走** で収集。classic pain と fresh pain の両面を網羅し、score / view_count / answer_count で demand-summary の裏取りも機能する
+- **技術系ソースの圧縮**: Zenn count を 100 → 30、HN normal_top_by_score を 100 → 30 に圧縮。技術系バイアスを相対的に下げ、SE を主軸に据える
 - **Show / Ask / Launch HN の分類タグ** (実装済み): 「自作プロダクト告知・具体的課題質問・YC ローンチ」を優先シグナルとして識別し、Haiku クラスタリング時に gap_candidates 側に流れやすくする
 - **Sonnet × 3 役割のアイデア創出** (S2 実装): 集約者は「複数シグナルで裏取れた痛み」に集中し、結合者は「SE ペイン × 技術 info の掛け合わせ」を主軸に、隙間発見者は「既存プロダクト告知の穴・隣接ドメイン移植・非エンジニア向け化」を担う
 - **将来の情報源拡張候補**: App Store 星 1-2 レビュー / Makuake 達成プロジェクト / クラウドワークス発注案件 / Indie Hackers milestones — 「既に金が動いている領域の隙間」が観察できるソース群
@@ -60,7 +60,7 @@
 
 **除外したソース**:
 - **X（Twitter）**: 公式 API が月 $100 で無料化と両立不可
-- **note / Reddit (過去に実装し Sprint C で撤去)**: 両者とも RSS / Atom 経由では score / likes 等の定量メタが取得できず demand-summary に組み込めなかった。Stack Exchange に置き換え済み
+- **note / Reddit (過去に実装し 2026-04 に撤去)**: 両者とも RSS / Atom 経由では score / likes 等の定量メタが取得できず demand-summary に組み込めなかった。Stack Exchange に置き換え済み
 - **Product Hunt**: 認証（OAuth / 開発者トークン）運用コストが高い割に日本語圏のシグナル密度が低いため保留
 - いずれも将来必要になった時点で再検討
 
