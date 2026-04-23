@@ -85,6 +85,8 @@ deliver.yml (UTC 22:30 = JST 07:30、analyze から 15min マージン)
 
 同じ規約が `src/lib/resend.ts` にも適用される。
 
+**lenient schema の注意**: `callParsed` の schema は zod パースに加え `zodOutputFormat` 経由で JSON Schema として LLM 側にも送られる。strict → lenient に緩めると model 側 enum/min 制約も消えて出力ドリフトが増えるので、(1) prompt 側で semantic anchor + negative example で補強し、(2) それでも model が systematic に外すパターンは app 側で fuzzy matcher を用意する。`src/analyzers/haiku.ts` の `LenientHaikuClusterOutputSchema` + `fuzzyMatchGapAngle` が現行例 (Haiku が `show_hn` を `show_fn` / `show_hm` に頻繁に外すケース)。
+
 ### HN `story_type` の伝播
 
 Hacker News のタイトル先頭 `Show/Ask/Launch/Tell HN:` は個人開発ネタの金鉱として Haiku クラスタリングで `gap_candidates` (show_hn / launch_hn) に強く振るための優先度シグナル。`hackernews.ts:classifyHnTitle` で分類 → `raw_signals.metadata.story_type` に格納 → `analyze.ts:toHaikuInputs` で `hn_story_type` にリフト → `HAIKU_SYSTEM` プロンプトに判定指針として渡る。新ソース追加時に類似のメタデータを通す必要がある場合、この 3 点を揃えること。
