@@ -2,7 +2,7 @@
 
 ## 概要
 
-個人開発で **月 ¥10k の収益** に到達するための「作るべきもの」を日次で発掘する自分用ツール。日本語圏のエンジニア向け情報ソース (Hacker News / Zenn / はてなブックマーク) から「痛み」「愚痴」「ニーズ」を自動収集し、LLM で構造化・スコアリングした個人開発アイデア Top 3〜5 件を **JST 朝 7:30 の 1 日 1 回、自分宛メール** で配信する。
+個人開発で **月 ¥10k の収益** に到達するための「作るべきもの」を日次で発掘する自分用ツール。非技術の生活ペイン (Stack Exchange 15 サイト) を主要ソース、技術系情報 (Hacker News / Zenn / はてなブックマーク) を副次ソースとして「痛み」「愚痴」「ニーズ」を自動収集し、LLM で構造化・スコアリングした個人開発アイデア Top 3〜5 件を **JST 朝 7:30 の 1 日 1 回、自分宛メール** で配信する。
 
 ## 目的と評価軸
 
@@ -14,12 +14,13 @@
 
 ### 現在の情報源バイアスと緩和策
 
-本ツールの 3 ソース (HN / Zenn / はてブ) は読者層が開発者中心で、「自作できる・無料志向」の層が多い。そのまま痛みシグナルとして採用すると DevTool / OSS 的アイデアに偏り、目的から外れやすい。この偏りの緩和策：
+技術系 3 ソース (HN / Zenn / はてブ) だけでは読者層が開発者中心で、「自作できる・無料志向」の層に偏り DevTool / OSS 的アイデアに流されて目的から外れやすい。この偏りの緩和策：
 
+- **Stack Exchange 15 サイトを主要ソースに据える**: 非技術 15 サイト (lifehacks / parenting / money / workplace / cooking / diy / interpersonal / travel / pets / gardening / fitness / law / outdoors / expatriates / academia) を **sort=month + sort=hot の 2 クエリ並走** で収集。classic pain と fresh pain の両面を網羅し、score / view_count / answer_count で demand-summary の裏取りも機能する
+- **技術系ソースの圧縮**: Zenn count を 100 → 30、HN normal_top_by_score を 100 → 30 に圧縮。技術系バイアスを相対的に下げ、SE を主軸に据える
 - **Show / Ask / Launch HN の分類タグ** (実装済み): 「自作プロダクト告知・具体的課題質問・YC ローンチ」を優先シグナルとして識別し、Haiku クラスタリング時に gap_candidates 側に流れやすくする
-- **HN normal のノイズフィルタ** (実装済み): HN 通常投稿 (Show/Ask/Launch/Tell プリフィックスなし) は 24h で 400+ 件発生するがほとんどが score 1-2 のままフィードから消えるため、収集時に HN score 上位 100 件のみ採用。日次収集量を ~638 件から ~313 件に抑え、analyze の 500 件上限に収まるようにする
-- **Sonnet × 3 役割のアイデア創出** (S2 実装): 集約者は「複数シグナルで裏取れた痛み」に集中し、結合者は「痛み × 技術の掛け合わせ」、隙間発見者は「既存プロダクト告知の穴・隣接ドメイン移植・非エンジニア向け化」を担う。1 役割が DevTool に偏っても他役割で補正する構造的バイアス低減
-- **将来の情報源拡張候補**: Indie Hackers milestones / Product Hunt / App Store & Steam ランキング / 既存サービスの低評価レビュー — 「既に金が動いている領域の隙間」が観察できるソース群
+- **Sonnet × 3 役割のアイデア創出** (S2 実装): 集約者は「複数シグナルで裏取れた痛み」に集中し、結合者は「SE ペイン × 技術 info の掛け合わせ」を主軸に、隙間発見者は「既存プロダクト告知の穴・隣接ドメイン移植・非エンジニア向け化」を担う
+- **将来の情報源拡張候補**: App Store 星 1-2 レビュー / Makuake 達成プロジェクト / クラウドワークス発注案件 / Indie Hackers milestones — 「既に金が動いている領域の隙間」が観察できるソース群
 - **スコアリング軸の段階的再定義**: `market_score` / `competition_score` を非エンジニア視点・B2B 小口視点に寄せる
 
 ## スコープ
@@ -52,20 +53,23 @@
 
 | ソース | 取得方法 | 備考 |
 |-------|---------|------|
-| はてなブックマーク | Hotentry RSS / カテゴリ RSS | IT カテゴリ中心 |
-| Zenn | 公式 API | 記事・トレンド |
-| Hacker News | Firebase API | Top / Ask HN |
+| **Stack Exchange (15 サイト)** | 公式 API v2.3 (sort=month + sort=hot 2 クエリ並走) | **主要ソース**。lifehacks / parenting / money / workplace / cooking / diy / interpersonal / travel / pets / gardening / fitness / law / outdoors / expatriates / academia |
+| はてなブックマーク | Hotentry RSS / カテゴリ RSS | IT カテゴリ中心 (副次) |
+| Zenn | 公式 API (count=30) | 記事・トレンド (副次) |
+| Hacker News | Firebase API (normal は score 上位 30) | Top / Ask / Show / Launch HN (副次) |
 
 **除外したソース**:
 - **X（Twitter）**: 公式 API が月 $100 で無料化と両立不可
-- **Reddit / Product Hunt**: 認証（OAuth / 開発者トークン）運用コストが高い割に日本語圏のシグナル密度が低いため初期スコープから除外
+- **note / Reddit (過去に実装し 2026-04 に撤去)**: 両者とも RSS / Atom 経由では score / likes 等の定量メタが取得できず demand-summary に組み込めなかった。Stack Exchange に置き換え済み
+- **Product Hunt**: 認証（OAuth / 開発者トークン）運用コストが高い割に日本語圏のシグナル密度が低いため保留
 - いずれも将来必要になった時点で再検討
 
 ## データベーススキーマ（概要）
 
 ### `raw_signals`（生データ）
 - `id` (uuid, pk)
-- `source` (enum: hatena / zenn / hackernews)
+- `source` (enum: hatena / zenn / hackernews / stackexchange)
+- Stack Exchange は 15 サイト (lifehacks / parenting / money / workplace / cooking / diy / interpersonal / travel / pets / gardening / fitness / law / outdoors / expatriates / academia) を `metadata.se_site` で区別する
 - `external_id` (text, ソース内 ID、重複チェック用)
 - `url` (text)
 - `title` (text)

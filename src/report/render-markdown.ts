@@ -22,8 +22,7 @@ const SOURCE_JA: Record<SourceLink['source'], string> = {
   hatena: 'はてブ',
   zenn: 'Zenn',
   hackernews: 'HN',
-  note: 'note',
-  reddit: 'Reddit',
+  stackexchange: 'Stack Exchange',
 };
 
 const FERMI_UNIT_JA: Record<FermiUnitType, string> = {

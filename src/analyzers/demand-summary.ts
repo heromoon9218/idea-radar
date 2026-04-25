@@ -2,10 +2,15 @@
 // Sprint A-1 で追加。目的は「累計 240 bkm」「HN 平均 87pt」のような定量シグナルを
 // Sonnet drafter に渡して痛みの強度を raw_score / WHY の根拠に反映させること。
 //
-// ソース横断で合算しない設計: hatena bkm / zenn likes / HN score は意味が違うため
-// ソース別に分けて集計する (合算値は誤読されやすい)。note / reddit は数値シグナルを
-// 持たないため集計対象外 (reddit は 2026-04 に RSS に切り替えた際に score / num_comments
-// を取得しなくなった。Atom feed では配信されないため復活不可)。
+// ソース横断で合算しない設計: hatena bkm / zenn likes / HN score / SE vote は意味が違うため
+// ソース別に分けて集計する (合算値は誤読されやすい)。
+//
+// スコアの桁感 (drafter 側での解釈のため):
+//   - hatena bkm:    3 桁なら強、2 桁なら中、1 桁なら弱
+//   - zenn likes:    2 桁なら強、1 桁なら中
+//   - HN score:      3 桁なら強 (HN フロントページ級)、2 桁なら中、1 桁なら弱
+//   - SE score:      2 桁なら強 (サイトによっては 1 桁でも強)、1 桁なら中、0 or 負なら弱
+//   - SE view_count: 4 桁以上で強 (1000+ views)、3 桁で中、2 桁以下で弱
 
 import type { SourceType } from '../types.js';
 
@@ -36,11 +41,23 @@ interface HackerNewsStats {
   totalComments: number;
 }
 
+interface StackExchangeStats {
+  articleCount: number;
+  totalScore: number;    // 累計 votes
+  avgScore: number;
+  maxScore: number;
+  totalViews: number;    // 累計 view_count (閲覧数)
+  maxViews: number;
+  totalAnswers: number;  // 累計 answer_count
+  answeredCount: number; // ベストアンサー済みの件数 (残り = 未解決の生きた痛み)
+}
+
 export interface DemandSummary {
   signalCount: number;
   hatena?: HatenaStats;
   zenn?: ZennStats;
   hackernews?: HackerNewsStats;
+  stackexchange?: StackExchangeStats;
 }
 
 function toNumber(v: unknown): number | null {
@@ -62,6 +79,10 @@ export function buildDemandSummary(
   const zennComments: number[] = [];
   const hnScores: number[] = [];
   const hnComments: number[] = [];
+  const seScores: number[] = [];
+  const seViews: number[] = [];
+  const seAnswers: number[] = [];
+  let seAnsweredCount = 0;
   let resolvedCount = 0;
 
   for (const id of signalIds) {
@@ -84,8 +105,15 @@ export function buildDemandSummary(
       const comments = toNumber(meta.descendants);
       if (score !== null) hnScores.push(score);
       if (comments !== null) hnComments.push(comments);
+    } else if (ref.source === 'stackexchange') {
+      const score = toNumber(meta.question_score);
+      const views = toNumber(meta.view_count);
+      const answers = toNumber(meta.answer_count);
+      if (score !== null) seScores.push(score);
+      if (views !== null) seViews.push(views);
+      if (answers !== null) seAnswers.push(answers);
+      if (meta.is_answered === true) seAnsweredCount += 1;
     }
-    // note / reddit は数値シグナルを持たないため集計なし
   }
 
   if (resolvedCount === 0) return null;
@@ -121,10 +149,22 @@ export function buildDemandSummary(
       totalComments: sum(hnComments),
     };
   }
+  if (seScores.length > 0 || seViews.length > 0) {
+    summary.stackexchange = {
+      articleCount: Math.max(seScores.length, seViews.length, seAnswers.length),
+      totalScore: sum(seScores),
+      avgScore: avg(seScores),
+      maxScore: max(seScores),
+      totalViews: sum(seViews),
+      maxViews: max(seViews),
+      totalAnswers: sum(seAnswers),
+      answeredCount: seAnsweredCount,
+    };
+  }
 
-  // signalCount 以外に意味のあるソース別集計が 1 つも無ければ null を返す
-  // (note / reddit 単独バンドルなど数値シグナルを持たないケース)。
-  const hasAnySource = summary.hatena || summary.zenn || summary.hackernews;
+  // signalCount 以外に意味のあるソース別集計が 1 つも無ければ null を返す。
+  const hasAnySource =
+    summary.hatena || summary.zenn || summary.hackernews || summary.stackexchange;
   if (!hasAnySource) return null;
   return summary;
 }
@@ -158,6 +198,17 @@ export function formatDemandSummaryForPrompt(summary: DemandSummary): string {
     if (hn.totalComments > 0) parts.push(`累計 comments ${hn.totalComments}`);
     lines.push(`- HN ${hn.articleCount} 記事: ${parts.join(' / ')}`);
   }
+  if (summary.stackexchange) {
+    const se = summary.stackexchange;
+    const parts: string[] = [];
+    parts.push(`累計 votes ${se.totalScore} (平均 ${se.avgScore}, 最大 ${se.maxScore})`);
+    if (se.totalViews > 0) parts.push(`累計 views ${se.totalViews} (最大 ${se.maxViews})`);
+    if (se.totalAnswers > 0) {
+      const unanswered = se.articleCount - se.answeredCount;
+      parts.push(`回答 ${se.totalAnswers} (未解決 ${unanswered}/${se.articleCount})`);
+    }
+    lines.push(`- Stack Exchange ${se.articleCount} 質問: ${parts.join(' / ')}`);
+  }
   lines.push(
     '',
     'これらの値は「痛みが複数人で裏取れているか」の強度指標です。WHY に 1 箇所以上の定量引用 (「累計 240 bkm」等) を含め、raw_score に反映してください。',
@@ -175,5 +226,10 @@ export function logLineDemandSummary(
   if (summary.hatena) parts.push(`bkm_total=${summary.hatena.totalBookmarks}`);
   if (summary.zenn) parts.push(`zenn_likes=${summary.zenn.totalLikes}`);
   if (summary.hackernews) parts.push(`hn_avg=${summary.hackernews.avgScore}`);
+  if (summary.stackexchange) {
+    parts.push(
+      `se_avg=${summary.stackexchange.avgScore} se_views=${summary.stackexchange.totalViews}`,
+    );
+  }
   return `[analyze] demand_summary ${label} ${parts.join(' ')}`;
 }

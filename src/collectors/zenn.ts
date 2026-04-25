@@ -1,7 +1,10 @@
 import { fetchWithRetry } from '../lib/fetch-retry.js';
 import type { RawSignalInput } from '../types.js';
 
-const API = 'https://zenn.dev/api/articles?order=latest&count=100';
+// Stack Exchange を主要ソースに据えた際に、技術系のバイアス低減のため 100 → 30 に圧縮。
+// Zenn は新着の大半が score (liked_count) 0-1 で埋もれる短文 / 自己紹介 / 日報記事が多く、
+// 上位 30 件に絞っても demand-summary の裏取り精度は損なわれにくい。
+const API = 'https://zenn.dev/api/articles?order=latest&count=30';
 
 interface ZennArticle {
   id: number;

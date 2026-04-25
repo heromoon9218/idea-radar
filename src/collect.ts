@@ -3,8 +3,7 @@ import { supabase } from './db/supabase.js';
 import { collectHatena } from './collectors/hatena.js';
 import { collectZenn } from './collectors/zenn.js';
 import { collectHackerNews } from './collectors/hackernews.js';
-import { collectNote } from './collectors/note.js';
-import { collectReddit } from './collectors/reddit.js';
+import { collectStackExchange } from './collectors/stackexchange.js';
 import { RawSignalInputSchema } from './types.js';
 import type { RawSignalInput, SourceType } from './types.js';
 
@@ -12,9 +11,13 @@ import type { RawSignalInput, SourceType } from './types.js';
 const WINDOW_MINUTES = 1450;
 // HN normal (Show/Ask/Launch/Tell プリフィックスなしの通常投稿) は 24h で 400+ 件発生し
 // score 1-2 で埋もれる記事が大半。score 上位 N 件のみ採用してノイズを削る。
-// hatena (~38) + zenn (~100) + HN 非 normal (~75) + HN normal top 100 = 約 313 件で、
-// analyze 側の MAX_SIGNALS_PER_BATCH=500 に収まり取りこぼしが無くなる。
-const HN_NORMAL_TOP_BY_SCORE = 100;
+// Stack Exchange を主要ソースに据えるにあたり、技術系バイアス低減のため 100 → 30 に圧縮。
+// HN score 上位 30 件は概ね score 50+ の質の高い技術議論に絞られる (下位 70 件は埋め草)。
+// 現行 4 ソースの日次件数内訳:
+//   hatena (~38) + zenn (~30) + HN 非 normal (~75) + HN normal top 30 + stackexchange 15 site (~80-150) ≒ 250-350 件
+// 初回 ingest 時は SE の 2 クエリが同時に返るので一時的に ~700-800 件まで伸びる想定。
+// analyze 側の MAX_SIGNALS_PER_BATCH は 1200 に引き上げ済み (src/analyze.ts)。
+const HN_NORMAL_TOP_BY_SCORE = 30;
 
 type CollectorFn = () => Promise<RawSignalInput[]>;
 
@@ -56,13 +59,10 @@ async function main(): Promise<void> {
       () =>
         collectHackerNews(WINDOW_MINUTES, { normalTopByScore: HN_NORMAL_TOP_BY_SCORE }),
     ],
-    // 軽量ドメイン (クリエイター / 副業 / 個人 EC / 個人投資家 / 自己管理) の痛みを拾うソース。
-    //   note:   複数ハッシュタグ RSS 束ね (~50-150 件)
-    //   reddit: 5 subreddit × 25 件 = 最大 125 件 (stickied / NSFW 除外後やや減る)
-    // 既存 313 件 + note ~100 + reddit ~100 = 約 510 件 になる見込みのため、
-    // analyze 側の MAX_SIGNALS_PER_BATCH は 500 → 700 に引き上げ済み (src/analyze.ts)。
-    ['note', () => collectNote(WINDOW_MINUTES)],
-    ['reddit', () => collectReddit(WINDOW_MINUTES)],
+    // 非技術の生活ペインを拾う主要ソース (15 サイトを内部で束ね、sort=month + sort=hot の 2 クエリ並走)。
+    // サイト一覧は src/collectors/stackexchange.ts:SITES を参照。
+    // score / view_count / answer_count を metadata に持つため demand-summary の裏取りが機能する。
+    ['stackexchange', () => collectStackExchange(WINDOW_MINUTES)],
   ];
 
   const outcomes = await Promise.all(
