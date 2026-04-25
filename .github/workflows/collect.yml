@@ -37,7 +37,9 @@ jobs:
         run: npm run collect
 
       - name: Open issue on failure
-        if: failure()
+        # cancelled() を含めるのは timeout-minutes 到達による中断を検知するため。
+        # GitHub Actions の failure() は cancel をカバーしない仕様。
+        if: failure() || cancelled()
         uses: actions/github-script@v9
         with:
           script: |

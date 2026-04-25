@@ -50,7 +50,7 @@ collect.yml (UTC 21:00 = JST 06:00)
   → 4 ソース (hatena / zenn / hackernews / stackexchange) 並列取得
   → raw_signals に UNIQUE(source, external_id) で重複除外 upsert
 
-analyze.yml (UTC 22:00 = JST 07:00、timeout 15min)
+analyze.yml (UTC 21:30 = JST 06:30、timeout 30min)
   → src/analyze.ts
   → raw_signals (processed=false, 直近 24h) を Haiku でクラスタリング
     (aggregator_bundles ≥3 / combinator_pairs ≥2 / gap_candidates ≥1 の 3 種類に分類)
@@ -58,7 +58,7 @@ analyze.yml (UTC 22:00 = JST 07:00、timeout 15min)
   → 合流して raw_score DESC で Top 10 を Tavily 競合検索 + Sonnet 3 軸スコア
   → ideas テーブルに最大 5 件 insert、signals を processed=true 更新
 
-deliver.yml (UTC 22:30 = JST 07:30、analyze から 15min マージン)
+deliver.yml (UTC 22:30 = JST 07:30、analyze から 30min マージン)
   → src/deliver.ts
   → ideas (delivered_at IS NULL, 直近 24h, total_score DESC) Top 5 を選択
   → Markdown + HTML 生成 → Resend 送信
