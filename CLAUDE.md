@@ -93,7 +93,7 @@ deliver.yml (UTC 22:30 = JST 07:30、analyze から 15min マージン)
 
 Hacker News のタイトル先頭 `Show/Ask/Launch/Tell HN:` は個人開発ネタの金鉱として Haiku クラスタリングで `gap_candidates` (show_hn / launch_hn) に強く振るための優先度シグナル。`hackernews.ts:classifyHnTitle` で分類 → `raw_signals.metadata.story_type` に格納 → `analyze.ts:toHaikuInputs` で `hn_story_type` にリフト → `HAIKU_SYSTEM` プロンプトに判定指針として渡る。新ソース追加時に類似のメタデータを通す必要がある場合、この 3 点を揃えること。
 
-Stack Exchange も同じパターンを踏襲する: `stackexchange.ts` が `metadata.se_site` (lifehacks / parenting / money) を格納 → `analyze.ts:toHaikuInputs` が `se_site` にリフト → `HAIKU_SYSTEM` プロンプトが「生活ハック / 育児 / 家計」系の痛みとしてクラスタリングの判断材料にする。
+Stack Exchange も同じパターンを踏襲する: `stackexchange.ts` が `metadata.se_site` (15 サイト: lifehacks / parenting / money / workplace / cooking / diy / interpersonal / travel / pets / gardening / fitness / law / outdoors / expatriates / academia) を格納 → `analyze.ts:toHaikuInputs` が `se_site` にリフト → `HAIKU_SYSTEM` プロンプトが「生活ハック / 育児 / 家計 / 職場 / 料理」等の痛みとしてクラスタリングの判断材料にする。サイト一覧の単一の真実は `src/collectors/stackexchange.ts:SITES`。
 
 ### HN normal ノイズフィルタ
 

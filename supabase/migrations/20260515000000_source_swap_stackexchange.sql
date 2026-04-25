@@ -3,7 +3,9 @@
 -- 背景:
 --   note / reddit は数値メタ (いいね / score) が取れず demand-summary が機能しないため
 --   非技術ソースとして機能不全だった (PR #34 時点でも note/reddit は集計対象外の扱い)。
---   代替として Stack Exchange 非技術サイト (lifehacks / parenting / money) を追加する。
+--   代替として Stack Exchange 非技術 15 サイト (lifehacks / parenting / money / workplace /
+--   cooking / diy / interpersonal / travel / pets / gardening / fitness / law / outdoors /
+--   expatriates / academia) を追加する。サイト一覧は src/collectors/stackexchange.ts:SITES。
 --   score / view_count / answer_count が API 経由で取れるため demand-summary に組み込める。
 --
 -- 案:

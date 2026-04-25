@@ -59,7 +59,8 @@ async function main(): Promise<void> {
       () =>
         collectHackerNews(WINDOW_MINUTES, { normalTopByScore: HN_NORMAL_TOP_BY_SCORE }),
     ],
-    // 非技術の生活ペインを拾うソース (lifehacks / parenting / money の 3 サイトを内部で束ねる)。
+    // 非技術の生活ペインを拾う主要ソース (15 サイトを内部で束ね、sort=month + sort=hot の 2 クエリ並走)。
+    // サイト一覧は src/collectors/stackexchange.ts:SITES を参照。
     // score / view_count / answer_count を metadata に持つため demand-summary の裏取りが機能する。
     ['stackexchange', () => collectStackExchange(WINDOW_MINUTES)],
   ];
