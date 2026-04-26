@@ -69,11 +69,18 @@ type LenientAggregatorBundle = LenientHaikuClusterOutput['aggregator_bundles'][n
 type LenientGapCandidate = LenientHaikuClusterOutput['gap_candidates'][number];
 
 // 1 回で受け渡しできる上限。SE 主要化の初回 ingest で最大 800 件程度のスパイクが来るため 700 に拡張。
-// Haiku 4 の input は 200k tokens。1 signal あたり serialize 後 ~200-300 tokens 平均なので
-// 700 signals ≒ 140-210k tokens で収まる想定。
+// Haiku 4 の input は 200k tokens。SE 本文 1500 chars 込みの実測で 1 signal ≒ 287 tokens
+// (700 signals で 201k tokens となり 200k 上限を超えた、2026-04-26 CI 失敗)。
+// 対策として buildUserPrompt 側で content を HAIKU_CONTENT_MAX_CHARS に切り詰めてから JSON 化する。
+// 700 signals × ~200 tokens/signal (切り詰め後) + system/schema 5k ≒ 145k tokens で収まる想定。
 export const HAIKU_MAX_SIGNALS = 700;
 // 出力は 3 種類の配列で、合計 30-60 個程度を想定。余裕を持って 8192 token。
 const HAIKU_MAX_TOKENS = 8192;
+// Haiku は痛みのクラスタリング判定だけ行うので本文の細部は不要。
+// SE は collection 時点で 1500 chars cap、Hatena/Zenn/HN は元から短い。
+// 800 chars あればクラスタ判定の根拠は読み取れる (Sonnet drafter は signalsById 経由で
+// 元の content にアクセスできるので、詳細起草の段階では full body が使える)。
+const HAIKU_CONTENT_MAX_CHARS = 800;
 
 const HAIKU_SYSTEM = `あなたは個人開発者向けアイデア発掘パイプラインのクラスタリング担当です。
 与えられたシグナルを以下 3 種類に分類します。アイデア文は書きません。
@@ -160,12 +167,18 @@ combinator_pairs 組成の推奨パターン:
 - info: 技術系ソース (例: Zenn の新 Calendar API 解説記事)
 - angle: "職場カレンダー調整の痛み × 新 Calendar API で平日限定 SaaS"`;
 
+function truncateForHaiku(s: HaikuSignalInput): HaikuSignalInput {
+  if (s.content === null || s.content.length <= HAIKU_CONTENT_MAX_CHARS) return s;
+  return { ...s, content: s.content.slice(0, HAIKU_CONTENT_MAX_CHARS) };
+}
+
 function buildUserPrompt(signals: HaikuSignalInput[]): string {
+  const truncated = signals.map(truncateForHaiku);
   return [
-    `以下 ${signals.length} 件のシグナルをクラスタリングしてください。`,
+    `以下 ${truncated.length} 件のシグナルをクラスタリングしてください。`,
     `各シグナルの id は UUID です。バンドルの signal_ids にはそのまま入力の UUID を使ってください。`,
     '',
-    JSON.stringify(signals, null, 2),
+    JSON.stringify(truncated, null, 2),
   ].join('\n');
 }
 
