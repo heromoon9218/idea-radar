@@ -134,6 +134,11 @@
    - `competition_score >= 3`（競合に埋もれるアイデアは個人で勝てない）
    - `risk_flags` に `category='distribution' && severity='high'` が含まれないこと（B2B エンタープライズ営業必須・大規模広告予算必須・代理店ネットワーク必須・SNS バズ前提 = 個人開発の流通域を超える）
    - **`tech_score` の足切りは設けない**: 「個人開発する意義」があるアイデアは多少難度が高くても残す。技術難度は `weighted_score` の重み付けには反映される
+   - **distribution カテゴリの severity 別運用**: `high` のみ自動足切り。`mid` / `low` は配信時の Markdown 警告表示のみで足切りしない（迂回設計やスコープ調整で救えるレベルとして人間判断に委ねる）
+   - **`sns_dependency` (drafter 自己申告) と `distribution=high` (auditor の 3rd party 視点) の役割分担**:
+     - `sns_dependency=high` → drafter が起こす流通仮説の自己申告で、`weighted_score` のペナルティに反映される（連続的な減点）
+     - `distribution=high` → auditor が distribution_hypothesis を 3rd party 視点で再評価し「個人 1 人では絶対に運用できない」場合のみ立てる二値判定（除外）
+     - 両者は意図的に別レイヤー（連続評価 ↔ クリフ判定）として併存させており、片方を消すと「程度の差」を取りこぼすので注意
 
 **各役割の最低シグナル要件:**
 | 役割 | 最低 signals | 理由 |

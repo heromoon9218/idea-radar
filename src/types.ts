@@ -254,7 +254,9 @@ export type RiskCategory = z.infer<typeof RiskCategorySchema>;
 
 export const RiskFlagSchema = z.object({
   kind: z.string().min(1), // ラベル (例: "薬機法 (SaMD 該当性)", "Google Maps API 商用規約", "医療ドメインの倫理リスク", "B2B 営業組織必須")
-  // category は LLM 出力では必須。旧 jsonb 行 (category 無) は default('other') で逃す。
+  // category は LLM 出力でもプロンプト側で必須化しているが、`.default('other')` を
+  // 付けて旧 jsonb 行 (category 無) との互換も同時に取る。LLM が省略した場合も
+  // 'other' に倒れて足切り条件 (category='distribution') は素通しする側に倒れる。
   category: RiskCategorySchema.default('other'),
   severity: RiskSeveritySchema,
   reason: z.string().min(1), // 1-2 文の根拠

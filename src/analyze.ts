@@ -589,24 +589,33 @@ async function main(): Promise<void> {
   //         (営業組織必須・大規模広告必須・代理店ネットワーク必須・SNS バズ前提 = 個人開発の流通域を超える)
   //    技術難度の足切りは撤廃: 「個人開発する意義」があるアイデアは多少難度が高くても残す方針。
   //    結果 5 件を下回る日は実件数で deliver する (件数保証より品質保証を優先)。
+  // 統計用: 1 アイデアにつき「最初に当たった足切り理由」だけ 1 回カウントする
+  // (market → competition → distribution の優先順位で mutually exclusive)。
+  // 別 filter を 3 回回すと複数条件で落ちたアイデアが重複カウントされ、合算が
+  // removed と一致しないログが出てしまうので、本ループ内で同時に集計する。
+  let byMarket = 0;
+  let byComp = 0;
+  let byDist = 0;
   const passed = scored.filter((s) => {
-    if (s.market_score < MARKET_SCORE_MIN) return false;
-    if (s.competition_score < COMPETITION_SCORE_MIN) return false;
+    if (s.market_score < MARKET_SCORE_MIN) {
+      byMarket++;
+      return false;
+    }
+    if (s.competition_score < COMPETITION_SCORE_MIN) {
+      byComp++;
+      return false;
+    }
     const distHigh = s.risk_flags.some(
       (f) => f.category === 'distribution' && f.severity === 'high',
     );
-    if (distHigh) return false;
+    if (distHigh) {
+      byDist++;
+      return false;
+    }
     return true;
   });
   const filteredOut = scored.length - passed.length;
   if (filteredOut > 0) {
-    const byMarket = scored.filter((s) => s.market_score < MARKET_SCORE_MIN).length;
-    const byComp = scored.filter(
-      (s) => s.competition_score < COMPETITION_SCORE_MIN,
-    ).length;
-    const byDist = scored.filter((s) =>
-      s.risk_flags.some((f) => f.category === 'distribution' && f.severity === 'high'),
-    ).length;
     console.log(
       `[analyze] gate_filter removed=${filteredOut} (market<${MARKET_SCORE_MIN}=${byMarket} / competition<${COMPETITION_SCORE_MIN}=${byComp} / distribution_high=${byDist})`,
     );
