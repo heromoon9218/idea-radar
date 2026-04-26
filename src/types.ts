@@ -230,12 +230,32 @@ export type DevilsAdvocatePersisted = z.infer<typeof DevilsAdvocatePersistedSche
 
 // ---- Sprint B-2: 赤旗スキャン (risk-auditor) ----
 // 法規制 (薬機法・金商法・資金決済法・景表法) / API 規約違反 / 倫理リスクを
-// 1 アイデアあたり 0-5 件スキャン。赤旗ありでも除外はせず Markdown に警告表示。
+// 1 アイデアあたり 0-5 件スキャン。
+//
+// 運用方針 (category 別に分岐):
+//   - legal / api / ethics / other → 除外せず Markdown に警告表示するだけ (人間判断に委ねる)
+//   - distribution                 → severity='high' のとき ideas insert から除外 (足切り)
+// 「個人開発の流通域を超える設計」(B2B エンタープライズ営業前提・大規模広告予算前提・代理店ネットワーク
+// 必須・SNS バズ前提) はサービス成立性の死活なので、ユーザー判断ではなく自動足切りに回す。
 export const RiskSeveritySchema = z.enum(['low', 'mid', 'high']);
 export type RiskSeverity = z.infer<typeof RiskSeveritySchema>;
 
+// distribution は流通設計のリスク (個人開発で運用しきれない流通モデル) を表すための専用カテゴリ。
+// 旧データは category を持たないため zod parse 時に 'other' に default され、足切り条件
+// (category='distribution' && severity='high') を素通しする。
+export const RiskCategorySchema = z.enum([
+  'legal',
+  'api',
+  'ethics',
+  'distribution',
+  'other',
+]);
+export type RiskCategory = z.infer<typeof RiskCategorySchema>;
+
 export const RiskFlagSchema = z.object({
-  kind: z.string().min(1), // ラベル (例: "薬機法 (SaMD 該当性)", "Google Maps API 商用規約", "医療ドメインの倫理リスク")
+  kind: z.string().min(1), // ラベル (例: "薬機法 (SaMD 該当性)", "Google Maps API 商用規約", "医療ドメインの倫理リスク", "B2B 営業組織必須")
+  // category は LLM 出力では必須。旧 jsonb 行 (category 無) は default('other') で逃す。
+  category: RiskCategorySchema.default('other'),
   severity: RiskSeveritySchema,
   reason: z.string().min(1), // 1-2 文の根拠
 });
