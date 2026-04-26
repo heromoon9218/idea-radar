@@ -1,7 +1,15 @@
 // SPEC.md のテンプレートに従って Top アイデア群を Markdown に整形する。
 // 入力は IdeaWithSources[] (source_links, competitors は既に解決済み)。
 
-import type { FermiEstimate, FermiUnitType, IdeaCategory, RiskFlag, RiskSeverity } from '../types.js';
+import type {
+  DistributionHypothesis,
+  FermiEstimate,
+  FermiUnitType,
+  IdeaCategory,
+  RiskFlag,
+  RiskSeverity,
+  SnsDependency,
+} from '../types.js';
 import type { IdeaWithSources, SourceLink } from './select-ideas.js';
 import { TARGET_MRR } from '../lib/goal-band.js';
 
@@ -36,6 +44,13 @@ const RISK_SEVERITY_JA: Record<RiskSeverity, string> = {
   high: '🚨 high',
   mid: '⚠️ mid',
   low: 'ℹ️ low',
+};
+
+// Sprint C-1: SNS バイラル依存度ラベル。high は「再現性が低い」のサイン。
+const SNS_DEPENDENCY_JA: Record<SnsDependency, string> = {
+  high: '高 (バズ前提)',
+  mid: '中',
+  low: '低 (SNS 不要でも届く)',
 };
 
 const TITLE_TRUNCATE = 60;
@@ -77,6 +92,12 @@ export function renderMarkdown(ideas: IdeaWithSources[], ctx: RenderContext): st
       );
       lines.push('');
     }
+    // Sprint C-1: 流通仮説を表示。旧行 (distribution_hypothesis=null) はスキップ。
+    if (idea.distribution_hypothesis) {
+      lines.push('**流通仮説**:');
+      lines.push(...formatDistributionLines(idea.distribution_hypothesis));
+      lines.push('');
+    }
     lines.push(`**類似サービス**: ${formatCompetitors(idea.competitors)}`);
     lines.push('');
     // Sprint B-2: リスク検出が 1 件以上ある場合のみ警告セクションを出す。
@@ -116,6 +137,20 @@ function formatRiskFlags(flags: RiskFlag[]): string {
       return `${sev} ${escapeInline(f.kind)}: ${escapeInline(f.reason)}`;
     })
     .join(' / ');
+}
+
+// Sprint C-1: 流通仮説を Markdown のリスト行 (3 行) で返す。
+// 1 行に詰めると first_10_users が 1-3 文ある時に email 折り返しで読みづらく、
+// セクション境界の区切り文字 (｜ / 等) が本文に混ざると視覚衝突するため、見出し下に箇条書きで出す。
+function formatDistributionLines(d: DistributionHypothesis): string[] {
+  const channels = d.channels.map((c) => escapeInline(c)).join(' / ');
+  const first10 = escapeInline(d.first_10_users);
+  const sns = SNS_DEPENDENCY_JA[d.sns_dependency];
+  return [
+    `- チャネル: ${channels}`,
+    `- 初期 10 ユーザー: ${first10}`,
+    `- SNS 依存度: ${sns}`,
+  ];
 }
 
 function formatCompetitors(competitors: IdeaWithSources['competitors']): string {

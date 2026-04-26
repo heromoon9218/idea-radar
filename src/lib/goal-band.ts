@@ -6,7 +6,7 @@
 //   20,001〜200,000 円  growth-channel : 持続性・流通設計・支払文化が効き始める境目
 //   > 200,000 円        moat           : 参入障壁 (データ / ネットワーク効果 / 規制)
 
-import type { SonnetScoredIdea } from '../types.js';
+import type { DistributionHypothesis, SonnetScoredIdea } from '../types.js';
 
 // 月収ゴール (円)。個人開発者 1 人の目標として growth-channel 帯中央に置く。
 // 帯を切り替えたい場合はこの定数を書き換える (環境変数化しない方針)。
@@ -35,19 +35,34 @@ export function weightsFor(band: GoalBand): ScoreWeights {
   return { market: 1.5, tech: 0.8, competition: 1.2 };
 }
 
+// Sprint C-1: SNS バイラル依存度に応じた weighted_score の調整。
+// high はバズ前提で再現性が低いため減点、low は流通設計が描けているので加点。
+// 値は 3 軸合計が ~3.5〜17.5 のレンジなので、最大級の差 (1.0) でも順位逆転は限定的。
+// 補正後の理論レンジは [2.5, 18.0]。numeric(4,2) (max 99.99) に収まるためクランプは不要。
+const SNS_DEPENDENCY_DELTA: Record<DistributionHypothesis['sns_dependency'], number> = {
+  high: -1.0,
+  mid: 0,
+  low: 0.5,
+};
+
 // 小数 2 桁で丸める (DB カラムは numeric(4,2))
+// distribution は Sprint C-1 で導入。旧呼び出し (sns_dependency なし) は補正 0 として動作する。
 export function computeWeightedScore(
   scored: Pick<
     SonnetScoredIdea,
     'market_score' | 'tech_score' | 'competition_score'
   >,
   weights: ScoreWeights,
+  distribution?: Pick<DistributionHypothesis, 'sns_dependency'> | null,
 ): number {
   const raw =
     scored.market_score * weights.market +
     scored.tech_score * weights.tech +
     scored.competition_score * weights.competition;
-  return Math.round(raw * 100) / 100;
+  const snsDelta = distribution
+    ? SNS_DEPENDENCY_DELTA[distribution.sns_dependency]
+    : 0;
+  return Math.round((raw + snsDelta) * 100) / 100;
 }
 
 export interface BandConfig {

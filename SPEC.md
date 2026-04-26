@@ -181,39 +181,13 @@
 - [基盤スプリント S1 / S2 / S3](docs/sprints/s1-s3-foundation.md) — 収集 / 分析 / 配信 の 3 段パイプライン基盤
 - [Sprint A: 分析精度の底上げ](docs/sprints/sprint-a.md) — 需要シグナル定量化 / Tavily 状態ハンドリング / ゴール帯別 weighted_score
 - [Sprint B: 起草・スコアリングの構造追加](docs/sprints/sprint-b.md) — Devil's advocate 2-pass / 赤旗スキャン / フェルミ推定必須化 / Tavily クエリ多角化
-
-### Sprint C: スキーマ拡張と semantic 類似判定（未着手）
-
-Sprint A/B が運用で効いているのを確認してから入れる。migration を伴うので Sprint B との同時着手は避ける。
-
-#### C-1: 流通仮説フィールド（distribution_hypothesis）
-
-- 「月 5 万円到達は作れば来るのではなく届け方次第」というゴール帯の認識をスキーマに刻む
-- `ideas.distribution_hypothesis` を jsonb で追加。中身:
-  - `channels`: 接触候補（コミュニティ / B2B 直営業 / 既存ツール連携）
-  - `first_10_users`: 最初の 10 人をどう獲得するか
-  - `sns_dependency`: SNS 依存度 (high/mid/low)。high は weighted_score 減点
-- drafter 3 役割のスキーマと system prompt に反映
-- Markdown に「**流通仮説**: ...」セクションを追加
-
-#### C-2: Semantic dedup（embedding による近似重複除外）
-
-- Sprint A で削除した「過去 N 日重複除外」が、運用が長くなって必要になった場合に備える (現時点では月 5 件 × 多様な 3-5 ソースで被りは少ない想定)
-- `ideas.embedding vector(1024)` 列を Supabase pgvector で追加
-- Anthropic / Voyage / OpenAI small のどれかで `title + what` を embedding
-- analyze 内で直近 14〜30 日の既存 idea とコサイン類似度 > 0.85 のアイデアを除外
-- 既存の軽量 dedup (title+category 完全一致) は残す (同一バッチ内の drafter 重複吸収用)
-
-**Sprint C 完了基準:**
-- [ ] `ideas.distribution_hypothesis` が新規 insert で必ず埋まる
-- [ ] Markdown に流通仮説セクションが出る
-- [ ] pgvector + embedding が稼働し、14 日以内の類似アイデアが除外される
-- [ ] embedding コストが月 $3 以下
+- [Sprint C: 流通仮説フィールドの追加](docs/sprints/sprint-c.md) — distribution_hypothesis (channels / first_10_users / sns_dependency) を drafter 必須化、Markdown と weighted_score に反映
 
 ### 保留（当面は入れない）
 
 - **3 役割間の cross-pollination**（combinator が aggregator の出力を参照する等）: 並列 → 直列化で analyze 時間が伸び、効果が不確実。B-1 の Devil's advocate で「別視点の反証」は代替される
 - **ピボット候補の自動生成**（A/B/C 案併記）: Devil's advocate で「却下理由」が出れば人間側でピボット判断できる。月 5 件しか配信しない規模で AI が自動ピボットまでやる必要性は薄い
+- **Semantic dedup (embedding ベースの近似重複除外)**: 月 5 件 × 多様な 4 ソースで被りは少ない想定。Anthropic は embedding API を提供していないため Voyage AI / OpenAI 等の追加プロバイダ契約が必要になり、運用コスト > 効果と判断。重複が実害として観察されたら再検討
 
 ## コスト試算（月額）
 

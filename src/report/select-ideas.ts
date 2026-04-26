@@ -5,11 +5,13 @@ import { z } from 'zod';
 import { supabase } from '../db/supabase.js';
 import {
   CompetitorSchema,
+  DistributionHypothesisSchema,
   FermiEstimateSchema,
   IdeaCategorySchema,
   RiskFlagSchema,
   SourceTypeSchema,
   type Competitor,
+  type DistributionHypothesis,
   type FermiEstimate,
   type RiskFlag,
 } from '../types.js';
@@ -21,10 +23,12 @@ const TOP_N = 5;
 // 翌日の fetch で同じ idea を再度拾って二重配信するのを防ぐためのガード。
 const REPORTED_LOOKBACK_DAYS = 2;
 
-// competitors / fermi_estimate / risk_flags は jsonb。parse は後段 (parseXxx) に任せる。
+// competitors / fermi_estimate / risk_flags / distribution_hypothesis は jsonb。
+// parse は後段 (parseXxx) に任せる。
 // weighted_score は Sprint A-3 で追加された numeric(4,2) 列。
 // Supabase クライアントは numeric を string で返すため z.coerce.number() で数値化する。
 // Sprint B で追加された fermi_estimate / risk_flags は nullable (旧行は NULL のまま残るため)。
+// Sprint C-1 で追加された distribution_hypothesis も同じく nullable。
 const IdeaRowSchema = z.object({
   id: z.string().uuid(),
   title: z.string(),
@@ -42,6 +46,7 @@ const IdeaRowSchema = z.object({
   created_at: z.string(),
   fermi_estimate: z.unknown().nullable().optional(),
   risk_flags: z.unknown().nullable().optional(),
+  distribution_hypothesis: z.unknown().nullable().optional(),
 });
 
 export type IdeaRow = z.infer<typeof IdeaRowSchema>;
@@ -72,6 +77,8 @@ export interface IdeaWithSources {
   // Sprint B で導入。旧行は未設定なので null 可。
   fermi_estimate: FermiEstimate | null;
   risk_flags: RiskFlag[];
+  // Sprint C-1 で導入。旧行は未設定なので null 可。
+  distribution_hypothesis: DistributionHypothesis | null;
 }
 
 const SignalRowSchema = z.object({
@@ -86,7 +93,7 @@ export async function fetchUndeliveredTopIdeas(): Promise<IdeaRow[]> {
   const { data, error } = await supabase
     .from('ideas')
     .select(
-      'id, title, why, what, how, category, market_score, tech_score, competition_score, total_score, weighted_score, competitors, source_signal_ids, created_at, fermi_estimate, risk_flags',
+      'id, title, why, what, how, category, market_score, tech_score, competition_score, total_score, weighted_score, competitors, source_signal_ids, created_at, fermi_estimate, risk_flags, distribution_hypothesis',
     )
     .is('delivered_at', null)
     .gte('created_at', since)
@@ -189,6 +196,7 @@ export async function attachSourceLinks(ideas: IdeaRow[]): Promise<IdeaWithSourc
       sources,
       fermi_estimate: parseFermi(idea.fermi_estimate),
       risk_flags: parseRiskFlags(idea.risk_flags),
+      distribution_hypothesis: parseDistributionHypothesis(idea.distribution_hypothesis),
     };
   });
 }
@@ -218,4 +226,17 @@ function parseRiskFlags(raw: unknown): RiskFlag[] {
   if (parsed.success) return parsed.data;
   console.warn('[deliver] invalid risk_flags jsonb, falling back to []:', parsed.error.message);
   return [];
+}
+
+// Sprint C-1: 旧 idea 行は NULL なので null 可で parse。
+// 壊れていたら null 扱いで続行 (Markdown でセクション省略)。
+function parseDistributionHypothesis(raw: unknown): DistributionHypothesis | null {
+  if (raw === null || raw === undefined) return null;
+  const parsed = DistributionHypothesisSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  console.warn(
+    '[deliver] invalid distribution_hypothesis jsonb, dropping:',
+    parsed.error.message,
+  );
+  return null;
 }
