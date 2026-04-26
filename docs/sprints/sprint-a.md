@@ -36,6 +36,8 @@ S1〜S3 で「毎朝アイデアが届く」基盤は完成した。Sprint A は
 
 ## A-3: ゴール帯別スコアリング + 重み付き weighted_score + tech_score 足切り
 
+> **2026-04 改訂**: 本節の `tech_score < 3` 足切りは **撤廃**。`market_score >= 3 AND competition_score >= 3 AND distribution リスク high なし` に置き換え (詳細は SPEC.md「分析層 → パイプライン 5)」)。`weighted_score` の重み定義と `TARGET_MRR` の帯切り替えは現行も継続。
+
 - 月収ゴール `TARGET_MRR` (定数、`src/lib/goal-band.ts` にハードコード、初期値 50000 円) に基づいて Sonnet rubric と `weighted_score` の重みを 3 帯で切り替える
 - 帯の境界値と重み (market / tech / competition):
 

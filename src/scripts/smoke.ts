@@ -22,6 +22,7 @@ import { draftFromAggregatorBundle } from '../analyzers/sonnet-aggregator.js';
 import { draftFromCombinatorPair } from '../analyzers/sonnet-combinator.js';
 import { draftFromGapCandidate } from '../analyzers/sonnet-gap-finder.js';
 import { scoreIdea, type TavilyStatus } from '../analyzers/sonnet.js';
+import { auditRisks } from '../analyzers/sonnet-risk-auditor.js';
 import {
   computeWeightedScore,
   describeBandConfig,
@@ -253,6 +254,28 @@ async function smokeAnalyze(): Promise<void> {
       scored.market_score + scored.tech_score + scored.competition_score
     }/15 weighted_score=${weighted.toFixed(2)} band=${bandConfig.band}`,
   );
+
+  // 5) risk_auditor を 1 件だけ通電 (本番 analyze と同じ呼び出し形)。
+  // distribution カテゴリの実出力が確認できないと足切り条件の妥当性が見えないため、
+  // smoke でもプロンプト → JSON 出力のドリフト検知を兼ねて 1 回回す。
+  try {
+    const riskFlags = await auditRisks({
+      candidate: scored,
+      distribution: top.distribution_hypothesis,
+    });
+    const distHigh = riskFlags.filter(
+      (f) => f.category === 'distribution' && f.severity === 'high',
+    ).length;
+    console.log(
+      `[smoke-analyze] risk_flags count=${riskFlags.length} distribution_high=${distHigh}`,
+    );
+    console.log(JSON.stringify(riskFlags, null, 2));
+  } catch (err) {
+    console.warn(
+      '[smoke-analyze] risk_audit failed:',
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 async function smokeDeliverDry(): Promise<void> {

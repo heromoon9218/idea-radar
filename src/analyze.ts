@@ -1,4 +1,4 @@
-// 日次バッチの分析パイプライン (Sprint B 反映版):
+// 日次バッチの分析パイプライン:
 //   1. raw_signals (未処理 / 直近 24h) を取得
 //   2. Haiku クラスタリング: aggregator_bundles (≥3) / combinator_pairs (≥2) / gap_candidates (≥1)
 //   3. Sonnet × 3 役割並列: 集約者 / 結合者 / 隙間発見者 がそれぞれアイデアを起草
@@ -9,7 +9,10 @@
 //        b. Sonnet 3 軸スコアリング (初回)
 //        c. 赤旗スキャン (risk_auditor) + Devil's advocate 2-pass 再スコア を Promise.all [B-1/B-2]
 //        d. 再スコアを採用、reasoning は devils_advocate jsonb へ保持
-//   6. tech_score 足切り → weighted_score DESC で Top 5 を ideas に insert
+//   6. 足切り (3 条件 AND): market_score >= 3 / competition_score >= 3 /
+//      risk_flags に category='distribution' && severity='high' が無いこと
+//      → weighted_score DESC で Top 5 を ideas に insert
+//      (技術難度の足切りは撤廃: 個人開発する意義があるアイデアは難度が高くても残す)
 //   7. signals を processed=true 更新
 //
 // 3 役割アプローチの意図: 「ハッカソンで 3 人が集まってブレストする」発想で
@@ -34,7 +37,8 @@ import { mapWithLimit } from './lib/concurrency.js';
 import {
   computeWeightedScore,
   describeBandConfig,
-  TECH_SCORE_MIN,
+  COMPETITION_SCORE_MIN,
+  MARKET_SCORE_MIN,
   type BandConfig,
 } from './lib/goal-band.js';
 import { searchParallel, type TavilySearchResult } from './lib/tavily.js';
@@ -393,8 +397,9 @@ async function scoreTopCandidates(
     // Sprint B-1 / B-2: リスク監査 + Devil's advocate 2-pass を並列実行。
     // いずれも初回スコアに依存するが、互いには独立なので Promise.all で同時発火。
     // どちらかが失敗しても他方は生かす (allSettled)。
+    // risk_auditor には distribution_hypothesis も渡す (流通カテゴリの判定材料)。
     const [riskSettled, devilSettled] = await Promise.allSettled([
-      auditRisks({ candidate: initial }),
+      auditRisks({ candidate: initial, distribution: c.distribution_hypothesis }),
       critiqueAndRescore(initial, {
         band: bandConfig.band,
         targetMrr: bandConfig.targetMrr,
@@ -577,14 +582,42 @@ async function main(): Promise<void> {
   const scored = await scoreTopCandidates(candidates, bandConfig);
   console.log(`[analyze] sonnet_scored=${scored.length}`);
 
-  // 5) 足切り: tech_score が TECH_SCORE_MIN 未満のアイデアは個人開発で MVP に辿り着けない
-  //    可能性が高いので ideas への insert 対象から除外する (帯に関係なく共通)。
+  // 5) 足切り (3 条件 AND):
+  //      a. market_score  >= MARKET_SCORE_MIN  (市場性が確保できないアイデアは月 ¥10k に届かない)
+  //      b. competition_score >= COMPETITION_SCORE_MIN (競合に埋もれるアイデアは個人で勝てない)
+  //      c. risk_flags に category='distribution' && severity='high' が含まれないこと
+  //         (営業組織必須・大規模広告必須・代理店ネットワーク必須・SNS バズ前提 = 個人開発の流通域を超える)
+  //    技術難度の足切りは撤廃: 「個人開発する意義」があるアイデアは多少難度が高くても残す方針。
   //    結果 5 件を下回る日は実件数で deliver する (件数保証より品質保証を優先)。
-  const passed = scored.filter((s) => s.tech_score >= TECH_SCORE_MIN);
+  // 統計用: 1 アイデアにつき「最初に当たった足切り理由」だけ 1 回カウントする
+  // (market → competition → distribution の優先順位で mutually exclusive)。
+  // 別 filter を 3 回回すと複数条件で落ちたアイデアが重複カウントされ、合算が
+  // removed と一致しないログが出てしまうので、本ループ内で同時に集計する。
+  let byMarket = 0;
+  let byComp = 0;
+  let byDist = 0;
+  const passed = scored.filter((s) => {
+    if (s.market_score < MARKET_SCORE_MIN) {
+      byMarket++;
+      return false;
+    }
+    if (s.competition_score < COMPETITION_SCORE_MIN) {
+      byComp++;
+      return false;
+    }
+    const distHigh = s.risk_flags.some(
+      (f) => f.category === 'distribution' && f.severity === 'high',
+    );
+    if (distHigh) {
+      byDist++;
+      return false;
+    }
+    return true;
+  });
   const filteredOut = scored.length - passed.length;
   if (filteredOut > 0) {
     console.log(
-      `[analyze] tech_score_filter removed=${filteredOut} (tech_score < ${TECH_SCORE_MIN})`,
+      `[analyze] gate_filter removed=${filteredOut} (market<${MARKET_SCORE_MIN}=${byMarket} / competition<${COMPETITION_SCORE_MIN}=${byComp} / distribution_high=${byDist})`,
     );
   }
 
