@@ -84,6 +84,19 @@ const INSERT_TOP_N = 5;
 //   ヒットし、2 件目以降のコストが 10% になる。
 const DRAFT_CONCURRENCY = 1;
 
+// 各 drafter 役割への入力上限。Haiku のクラスタリング結果がスパイクすると
+// (実測: 2026-04-24 gap=72 / 2026-04-26 gap=59) DRAFT_CONCURRENCY=1 直列実行で
+// gap_finder だけで 30min の workflow timeout を食い潰し analyze 全体が cancel される。
+// 後段の SONNET_TOP_N=10 で 9 割近くの候補は捨てられる構造なので、入力段で上限を切っても
+// 最終アウトプット品質への影響は限定的 (Haiku 出力順を信頼してトリム)。
+// 値の根拠 (1 ドラフト ~30-40s, 30min timeout 前提):
+//   - 通常時の各役割の出力数: aggregator 0-8 / combinator 4-11 / gap 6-30
+//   - 上限を超えるのは月数回のスパイク (SE 主要化以降)
+//   - 25 + 20 + 15 = 60 件 × 35s × (DRAFT_CONCURRENCY=1, 3 役割並列) = ~14.5min 上限
+const AGGREGATOR_MAX_INPUTS = 15;
+const COMBINATOR_MAX_INPUTS = 20;
+const GAP_MAX_INPUTS = 25;
+
 // Tavily の無料プランで明示的な per-second レート制限は公表されていないが、
 // 10 req/バッチを数秒間隔で叩く保険として 300ms の最小間隔を置く。
 const SEARCH_MIN_INTERVAL_MS = 300;
@@ -518,6 +531,24 @@ function toIdeaRow(s: ScoredWithWeight): Record<string, unknown> {
   };
 }
 
+// Haiku 出力の各バンドル種別を上限で切り詰める。トリム時はログを残して観測可能にする。
+// Haiku 自体は配列内の優先度を明示しないが、システムプロンプトで「強いエビデンスを優先」と
+// 指示しているので前方優先で slice する (出力順を Haiku の判断として信頼)。
+function capDrafterInputs(
+  cluster: Awaited<ReturnType<typeof clusterSignals>>,
+): Awaited<ReturnType<typeof clusterSignals>> {
+  const cap = <T>(items: T[], max: number, label: string): T[] => {
+    if (items.length <= max) return items;
+    console.log(`[analyze] ${label} trimmed ${items.length}→${max} (cap to fit timeout)`);
+    return items.slice(0, max);
+  };
+  return {
+    aggregator_bundles: cap(cluster.aggregator_bundles, AGGREGATOR_MAX_INPUTS, 'aggregator_bundles'),
+    combinator_pairs: cap(cluster.combinator_pairs, COMBINATOR_MAX_INPUTS, 'combinator_pairs'),
+    gap_candidates: cap(cluster.gap_candidates, GAP_MAX_INPUTS, 'gap_candidates'),
+  };
+}
+
 async function main(): Promise<void> {
   const bandConfig = describeBandConfig();
   console.log(
@@ -551,10 +582,13 @@ async function main(): Promise<void> {
 
   // 1) Haiku クラスタリング
   const cluster = await clusterSignals(signals);
+  // スパイク日 (gap が 50+ 出る等) に drafter フェーズが timeout を食い潰さないよう、
+  // 各役割への入力数を上限でトリミングする。Haiku 出力の上位 N 件を採用 (Haiku の優先度を信頼)。
+  const cappedCluster = capDrafterInputs(cluster);
   const totalClusterInputs =
-    cluster.aggregator_bundles.length +
-    cluster.combinator_pairs.length +
-    cluster.gap_candidates.length;
+    cappedCluster.aggregator_bundles.length +
+    cappedCluster.combinator_pairs.length +
+    cappedCluster.gap_candidates.length;
   if (totalClusterInputs === 0) {
     // クラスタリング結果 0 件でもこのバッチのシグナルは処理済みとみなす
     await markProcessed(signals.map((s) => s.id));
@@ -563,7 +597,7 @@ async function main(): Promise<void> {
   }
 
   // 2) Sonnet × 3 役割並列でアイデア起草
-  const drafted = await draftByThreeRoles(cluster, signals, metadataById);
+  const drafted = await draftByThreeRoles(cappedCluster, signals, metadataById);
   console.log(`[analyze] total_drafted=${drafted.length}`);
   if (drafted.length === 0) {
     await markProcessed(signals.map((s) => s.id));
