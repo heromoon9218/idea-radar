@@ -6,6 +6,7 @@ import type {
   FermiEstimate,
   FermiUnitType,
   IdeaCategory,
+  IdeaRole,
   RiskFlag,
   RiskSeverity,
   SnsDependency,
@@ -53,6 +54,14 @@ const SNS_DEPENDENCY_JA: Record<SnsDependency, string> = {
   low: '低 (SNS 不要でも届く)',
 };
 
+// 3 役割の drafter ラベル。同じ Sonnet でも視点が異なるので読み手側で
+// 「どの視点から出たアイデアか」を判別できるようにメールに添える。
+const ROLE_JA: Record<IdeaRole, string> = {
+  aggregator: '集約者 (複数シグナルを束ねた共通痛み)',
+  combinator: '結合者 (痛み × 情報源の掛け合わせ)',
+  gap_finder: '隙間発見者 (Show/Ask HN 等の単発ニッチ)',
+};
+
 const TITLE_TRUNCATE = 60;
 
 export function renderMarkdown(ideas: IdeaWithSources[], ctx: RenderContext): string {
@@ -79,6 +88,12 @@ export function renderMarkdown(ideas: IdeaWithSources[], ctx: RenderContext): st
     }
     lines.push(`**カテゴリ**: ${CATEGORY_JA[idea.category]}`);
     lines.push('');
+    // 起草役割 (audit trail)。20260511 マイグレーション以前の旧行は role が NULL なので
+    // その場合は行ごと省略する。
+    if (idea.role) {
+      lines.push(`**起草役割**: ${ROLE_JA[idea.role]}`);
+      lines.push('');
+    }
     // weighted_score は Sprint A-3 で導入した帯別重み付きスコア (numeric, 小数 2 桁)。
     // 3 軸は従来通り 1-5 で表示し、合計欄は重み適用後の値を 1 桁目まで示す。
     lines.push(
