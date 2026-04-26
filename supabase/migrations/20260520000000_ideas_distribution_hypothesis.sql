@@ -1,0 +1,14 @@
+-- Sprint C-1: 流通仮説 (distribution_hypothesis)
+-- 「月 5 万円到達は作れば来るのではなく届け方次第」というゴール帯認識をスキーマに刻む。
+-- drafter (3 役割) に必須化させ、analyze 側で sns_dependency=high のアイデアを weighted_score 減点に使う。
+--
+-- 構造:
+--   {
+--     channels: string[]            // 接触候補 (例: ["Instagram", "B2B 直営業", "Notion 連携 Marketplace"])
+--     first_10_users: string        // 最初の 10 人の獲得シナリオ (1-3 文)
+--     sns_dependency: 'high'|'mid'|'low'  // SNS 依存度。high は weighted_score 減点
+--   }
+--
+-- 旧 idea 行 (Sprint C 以前に insert された行) は NULL のまま残す。
+-- deliver 側は select-ideas.ts でフォールバック (Markdown でセクション省略) する。
+alter table ideas add column if not exists distribution_hypothesis jsonb;

@@ -119,6 +119,20 @@ export const FermiEstimateSchema = z.object({
 });
 export type FermiEstimate = z.infer<typeof FermiEstimateSchema>;
 
+// Sprint C-1: 流通仮説。「作れば来る」ではなく「届け方を最初から設計する」を強制するためのフィールド。
+//   channels        = 1-3 個の接触候補 (例: ["Instagram", "B2B 直営業", "Notion Marketplace"])
+//   first_10_users  = 最初の 10 人をどう獲得するかの 1-3 文シナリオ (CRM・知人配布も可)
+//   sns_dependency  = SNS バイラル依存度。high は weighted_score 減点 (再現性が低いため)
+export const SnsDependencySchema = z.enum(['high', 'mid', 'low']);
+export type SnsDependency = z.infer<typeof SnsDependencySchema>;
+
+export const DistributionHypothesisSchema = z.object({
+  channels: z.array(z.string().min(1)).min(1).max(5),
+  first_10_users: z.string().min(1),
+  sns_dependency: SnsDependencySchema,
+});
+export type DistributionHypothesis = z.infer<typeof DistributionHypothesisSchema>;
+
 // アイデアは WHY / WHAT / HOW の 3 段構成で記述する:
 //   why  = 誰のどんな痛みか (ターゲット像 + 状況 + 困りごと)
 //   what = 何を作るか (プロダクト概要 + 差別化 + 収益モデル)
@@ -126,6 +140,7 @@ export type FermiEstimate = z.infer<typeof FermiEstimateSchema>;
 // レポートで「HOW が薄い = 実装イメージが無い」のフィルタに使えるため、
 // 3 フィールドとも具体文を強制する (zod min(1))。
 // Sprint B-3: fermi_estimate を必須化 (drafter 3 役割は推定不可の場合アイデア自体を除外する)。
+// Sprint C-1: distribution_hypothesis も必須化 (流通設計が描けないアイデアは収益化できないため)。
 export const HaikuIdeaCandidateSchema = z.object({
   title: z.string().min(1),
   why: z.string().min(1),
@@ -134,18 +149,20 @@ export const HaikuIdeaCandidateSchema = z.object({
   category: IdeaCategorySchema,
   raw_score: z.number().int().min(1).max(5),
   fermi_estimate: FermiEstimateSchema,
+  distribution_hypothesis: DistributionHypothesisSchema,
   source_signal_ids: z.array(z.string().uuid()).min(1),
 });
 export type HaikuIdeaCandidate = z.infer<typeof HaikuIdeaCandidateSchema>;
 
 // drafter が LLM 出力を受ける際の緩スキーマ。
-// HaikuIdeaCandidateSchema との差分は fermi_estimate を optional にしていること。
-// 狙い: LLM が個別アイデアで fermi_estimate を付け忘れた場合に、バンドル全体が zod parse 失敗で
+// HaikuIdeaCandidateSchema との差分は fermi_estimate / distribution_hypothesis を optional にしていること。
+// 狙い: LLM が個別アイデアで必須フィールドを付け忘れた場合に、バンドル全体が zod parse 失敗で
 //       ロスするのを避ける。drafter 側で欠落アイデアだけ warn + filter out し、健全な候補は通す。
-// 下流 (analyze.ts) では fermi_estimate 必須の HaikuIdeaCandidate を期待するので、
+// 下流 (analyze.ts) では両方必須の HaikuIdeaCandidate を期待するので、
 // drafter が戻り値を返す前に filter すること (analyzers/draft-filter.ts 参照)。
 export const DraftCandidateSchema = HaikuIdeaCandidateSchema.extend({
   fermi_estimate: FermiEstimateSchema.optional(),
+  distribution_hypothesis: DistributionHypothesisSchema.optional(),
 });
 export type DraftCandidate = z.infer<typeof DraftCandidateSchema>;
 

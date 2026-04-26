@@ -43,6 +43,7 @@ import {
   HnStoryTypeSchema,
   SourceTypeSchema,
   type DevilsAdvocatePersisted,
+  type DistributionHypothesis,
   type FermiEstimate,
   type HaikuIdeaCandidate,
   type HaikuSignalInput,
@@ -113,6 +114,7 @@ interface ScoredWithWeight extends SonnetScoredIdea {
   role: IdeaRole;
   weighted_score: number;
   fermi_estimate: FermiEstimate;
+  distribution_hypothesis: DistributionHypothesis;
   risk_flags: RiskFlag[];
   devils_advocate: DevilsAdvocatePersisted;
 }
@@ -460,12 +462,19 @@ async function scoreTopCandidates(
       tech_score: finalTech,
       competition_score: finalComp,
     };
-    const weighted_score = computeWeightedScore(final, bandConfig.weights);
+    // Sprint C-1: weighted_score に sns_dependency=high のペナルティを乗せる。
+    // distribution_hypothesis は drafter で必須化されているので必ず存在する。
+    const weighted_score = computeWeightedScore(
+      final,
+      bandConfig.weights,
+      c.distribution_hypothesis,
+    );
     scored.push({
       ...final,
       role: c.role,
       weighted_score,
       fermi_estimate: c.fermi_estimate,
+      distribution_hypothesis: c.distribution_hypothesis,
       risk_flags,
       devils_advocate,
     });
@@ -494,7 +503,11 @@ function toIdeaRow(s: ScoredWithWeight): Record<string, unknown> {
     //   fermi_estimate    = Markdown に「月 5 万円到達: ...」で表示 (render-markdown.ts)
     //   risk_flags        = Markdown に「⚠️ リスク: ...」で表示 (render-markdown.ts)
     //   devils_advocate   = DB 内の audit trail 専用。deliver には出さず、手動 SQL / 将来の振り返り用途
+    // Sprint C-1:
+    //   distribution_hypothesis = Markdown に「**流通仮説**: ...」で表示 (render-markdown.ts)
+    //                              + sns_dependency=high はここまでで weighted_score に -1.0 のペナルティ反映済み
     fermi_estimate: s.fermi_estimate,
+    distribution_hypothesis: s.distribution_hypothesis,
     risk_flags: s.risk_flags,
     devils_advocate: s.devils_advocate,
   };

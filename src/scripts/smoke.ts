@@ -239,7 +239,13 @@ async function smokeAnalyze(): Promise<void> {
     band: bandConfig.band,
     targetMrr: bandConfig.targetMrr,
   });
-  const weighted = computeWeightedScore(scored, bandConfig.weights);
+  // Sprint C-1: smoke でも distribution_hypothesis に基づく sns_dependency 補正を反映する。
+  // drafter で必須化済みなので top.distribution_hypothesis は必ず存在する。
+  const weighted = computeWeightedScore(
+    scored,
+    bandConfig.weights,
+    top.distribution_hypothesis,
+  );
   console.log('[smoke-analyze] sonnet_score_output:');
   console.log(JSON.stringify(scored, null, 2));
   console.log(
