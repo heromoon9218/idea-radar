@@ -8,11 +8,13 @@ import {
   DistributionHypothesisSchema,
   FermiEstimateSchema,
   IdeaCategorySchema,
+  IdeaRoleSchema,
   RiskFlagSchema,
   SourceTypeSchema,
   type Competitor,
   type DistributionHypothesis,
   type FermiEstimate,
+  type IdeaRole,
   type RiskFlag,
 } from '../types.js';
 
@@ -47,6 +49,9 @@ const IdeaRowSchema = z.object({
   fermi_estimate: z.unknown().nullable().optional(),
   risk_flags: z.unknown().nullable().optional(),
   distribution_hypothesis: z.unknown().nullable().optional(),
+  // ideas.role は 20260511 マイグレーションで追加された audit trail。
+  // それ以前にバックフィルされた行は NULL のまま残る (retro で埋められない) ので nullable。
+  role: IdeaRoleSchema.nullable().optional(),
 });
 
 export type IdeaRow = z.infer<typeof IdeaRowSchema>;
@@ -79,6 +84,9 @@ export interface IdeaWithSources {
   risk_flags: RiskFlag[];
   // Sprint C-1 で導入。旧行は未設定なので null 可。
   distribution_hypothesis: DistributionHypothesis | null;
+  // どの drafter 役割が起草したかの audit trail。
+  // 20260511 のマイグレーション以前にバックフィルされた行は NULL のまま残る。
+  role: IdeaRole | null;
 }
 
 const SignalRowSchema = z.object({
@@ -93,7 +101,7 @@ export async function fetchUndeliveredTopIdeas(): Promise<IdeaRow[]> {
   const { data, error } = await supabase
     .from('ideas')
     .select(
-      'id, title, why, what, how, category, market_score, tech_score, competition_score, total_score, weighted_score, competitors, source_signal_ids, created_at, fermi_estimate, risk_flags, distribution_hypothesis',
+      'id, title, why, what, how, category, market_score, tech_score, competition_score, total_score, weighted_score, competitors, source_signal_ids, created_at, fermi_estimate, risk_flags, distribution_hypothesis, role',
     )
     .is('delivered_at', null)
     .gte('created_at', since)
@@ -197,6 +205,7 @@ export async function attachSourceLinks(ideas: IdeaRow[]): Promise<IdeaWithSourc
       fermi_estimate: parseFermi(idea.fermi_estimate),
       risk_flags: parseRiskFlags(idea.risk_flags),
       distribution_hypothesis: parseDistributionHypothesis(idea.distribution_hypothesis),
+      role: idea.role ?? null,
     };
   });
 }
