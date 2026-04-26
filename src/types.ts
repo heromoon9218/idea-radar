@@ -126,8 +126,9 @@ export type FermiEstimate = z.infer<typeof FermiEstimateSchema>;
 export const SnsDependencySchema = z.enum(['high', 'mid', 'low']);
 export type SnsDependency = z.infer<typeof SnsDependencySchema>;
 
+// channels は 1-3 個 (drafter 3 役割の prompt 側もこの範囲で要求している)。
 export const DistributionHypothesisSchema = z.object({
-  channels: z.array(z.string().min(1)).min(1).max(5),
+  channels: z.array(z.string().min(1)).min(1).max(3),
   first_10_users: z.string().min(1),
   sns_dependency: SnsDependencySchema,
 });

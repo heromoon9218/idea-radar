@@ -38,7 +38,7 @@ export function weightsFor(band: GoalBand): ScoreWeights {
 // Sprint C-1: SNS バイラル依存度に応じた weighted_score の調整。
 // high はバズ前提で再現性が低いため減点、low は流通設計が描けているので加点。
 // 値は 3 軸合計が ~3.5〜17.5 のレンジなので、最大級の差 (1.0) でも順位逆転は限定的。
-// numeric(4,2) のスコアレンジ (max ~17.5) を超えないよう、加点は 0.5 に抑える。
+// 補正後の理論レンジは [2.5, 18.0]。numeric(4,2) (max 99.99) に収まるためクランプは不要。
 const SNS_DEPENDENCY_DELTA: Record<DistributionHypothesis['sns_dependency'], number> = {
   high: -1.0,
   mid: 0,
@@ -62,9 +62,7 @@ export function computeWeightedScore(
   const snsDelta = distribution
     ? SNS_DEPENDENCY_DELTA[distribution.sns_dependency]
     : 0;
-  // 下限 0、上限 17.5 でクランプ (numeric(4,2) と論理レンジ整合)
-  const adjusted = Math.max(0, Math.min(17.5, raw + snsDelta));
-  return Math.round(adjusted * 100) / 100;
+  return Math.round((raw + snsDelta) * 100) / 100;
 }
 
 export interface BandConfig {
