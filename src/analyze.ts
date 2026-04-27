@@ -84,6 +84,21 @@ const INSERT_TOP_N = 5;
 //   ヒットし、2 件目以降のコストが 10% になる。
 const DRAFT_CONCURRENCY = 1;
 
+// 各 drafter 役割への入力上限。Haiku のクラスタリング結果がスパイクすると
+// (実測: 2026-04-24 gap=72 / 2026-04-26 gap=59) DRAFT_CONCURRENCY=1 直列実行で
+// gap_finder だけで 30min の workflow timeout を食い潰し analyze 全体が cancel される。
+// 後段の SONNET_TOP_N=10 で 9 割近くの候補は捨てられる構造なので、入力段で上限を切っても
+// 最終アウトプット品質への影響は限定的 (signal_ids 数の多い順 = エビデンス強い順にトリム)。
+// 値の根拠 (1 ドラフト ~30-40s, 30min timeout 前提):
+//   - 通常時の各役割の出力数: aggregator 0-8 / combinator 4-11 / gap 6-30
+//   - 上限を超えるのは月数回のスパイク (SE 主要化以降)
+//   - 3 役割は Promise.all で並列実行されるので、所要時間のボトルネックは最長役割
+//     (= max(15, 20, 25) = gap=25 件 × ~35s ≈ 14.5min)。30min timeout に対し十分なマージン
+//   - timeout 自体を延ばさないのは deliver workflow が analyze から 30min 後に走る制約のため
+const AGGREGATOR_MAX_INPUTS = 15;
+const COMBINATOR_MAX_INPUTS = 20;
+const GAP_MAX_INPUTS = 25;
+
 // Tavily の無料プランで明示的な per-second レート制限は公表されていないが、
 // 10 req/バッチを数秒間隔で叩く保険として 300ms の最小間隔を置く。
 const SEARCH_MIN_INTERVAL_MS = 300;
@@ -518,6 +533,46 @@ function toIdeaRow(s: ScoredWithWeight): Record<string, unknown> {
   };
 }
 
+// Haiku 出力の各バンドル種別を上限で切り詰める。トリム時はログを残して観測可能にする。
+// Haiku の出力順はスキーマレベルでは保証されないので、エビデンス強度
+// (= 紐づく signal の数) の降順でソートしてから先頭 max 件を採用する。
+// combinator は pain と info を合算した総 signal 数で評価する。
+function capDrafterInputs(
+  cluster: Awaited<ReturnType<typeof clusterSignals>>,
+): Awaited<ReturnType<typeof clusterSignals>> {
+  const capByEvidence = <T>(
+    items: T[],
+    max: number,
+    label: string,
+    evidenceOf: (item: T) => number,
+  ): T[] => {
+    if (items.length <= max) return items;
+    const sorted = [...items].sort((a, b) => evidenceOf(b) - evidenceOf(a));
+    console.log(`[analyze] ${label} trimmed ${items.length}→${max} (cap to fit timeout)`);
+    return sorted.slice(0, max);
+  };
+  return {
+    aggregator_bundles: capByEvidence(
+      cluster.aggregator_bundles,
+      AGGREGATOR_MAX_INPUTS,
+      'aggregator_bundles',
+      (b) => b.signal_ids.length,
+    ),
+    combinator_pairs: capByEvidence(
+      cluster.combinator_pairs,
+      COMBINATOR_MAX_INPUTS,
+      'combinator_pairs',
+      (p) => p.pain_signal_ids.length + p.info_signal_ids.length,
+    ),
+    gap_candidates: capByEvidence(
+      cluster.gap_candidates,
+      GAP_MAX_INPUTS,
+      'gap_candidates',
+      (g) => g.signal_ids.length,
+    ),
+  };
+}
+
 async function main(): Promise<void> {
   const bandConfig = describeBandConfig();
   console.log(
@@ -551,10 +606,13 @@ async function main(): Promise<void> {
 
   // 1) Haiku クラスタリング
   const cluster = await clusterSignals(signals);
+  // スパイク日 (gap が 50+ 出る等) に drafter フェーズが timeout を食い潰さないよう、
+  // 各役割への入力数を上限でトリミングする (signal_ids 数 = エビデンス強度の降順で先頭 N 件)。
+  const cappedCluster = capDrafterInputs(cluster);
   const totalClusterInputs =
-    cluster.aggregator_bundles.length +
-    cluster.combinator_pairs.length +
-    cluster.gap_candidates.length;
+    cappedCluster.aggregator_bundles.length +
+    cappedCluster.combinator_pairs.length +
+    cappedCluster.gap_candidates.length;
   if (totalClusterInputs === 0) {
     // クラスタリング結果 0 件でもこのバッチのシグナルは処理済みとみなす
     await markProcessed(signals.map((s) => s.id));
@@ -563,7 +621,7 @@ async function main(): Promise<void> {
   }
 
   // 2) Sonnet × 3 役割並列でアイデア起草
-  const drafted = await draftByThreeRoles(cluster, signals, metadataById);
+  const drafted = await draftByThreeRoles(cappedCluster, signals, metadataById);
   console.log(`[analyze] total_drafted=${drafted.length}`);
   if (drafted.length === 0) {
     await markProcessed(signals.map((s) => s.id));
