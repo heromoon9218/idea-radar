@@ -80,7 +80,7 @@ export function describeBandConfig(targetMrr: number = TARGET_MRR): BandConfig {
 }
 
 // market_score / competition_score 足切り閾値。
-// 個人開発で月 ¥10k に到達する条件として、(1) 一定の市場性、(2) 競合に埋もれない隙間、を必須化する。
+// 個人開発で月 ¥50k に到達する条件として、(1) 一定の市場性、(2) 競合に埋もれない隙間、を必須化する。
 // tech_score の足切りは撤廃: 技術難度が高くても「個人開発する意義」がある (= 既存大手が手を出しにくい)
 // アイデアは挑戦したいため、技術難度では落とさない。
 // 全帯共通 (帯ごとの「市場性が効くか・競合が効くか」は weighted_score の重みで調整済み)。
