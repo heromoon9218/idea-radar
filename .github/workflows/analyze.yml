@@ -3,8 +3,9 @@ name: analyze
 on:
   schedule:
     # UTC 21:30 = JST 翌朝 06:30 (1 日 1 回)。
-    # collect 完了 (UTC 21:10 目安) の 20 分後に開始し、deliver (UTC 22:30) との間に
-    # timeout-minutes: 30 を吸収できるマージンを確保する。
+    # collect 完了 (UTC 21:10 目安) の 20 分後に開始する。
+    # deliver は UTC 22:30 開始なので、timeout-minutes: 45 が満了 (UTC 22:15) しても
+    # deliver までに 15min のマージンが残る (通常は 25-30min で完走するためより広い)。
     - cron: '30 21 * * *'
   workflow_dispatch:
 
@@ -22,7 +23,9 @@ jobs:
     # Haiku が gap_candidates を 70+ 件出すスパイク日に Sonnet 起草 (DRAFT_CONCURRENCY=1
     # で 1 件 ~30s) が間に合うよう余裕を持たせる。2026-04-25 朝の配信欠落が 15min
     # timeout に到達した cancel が原因だったので 30min に引き上げ。
-    timeout-minutes: 30
+    # その後 SONNET_TOP_N 撤廃で全候補スコアリング (~30 件 × ~30s ≈ 15-18min) が drafter
+    # phase (~14.5min) と直列で走るようになり、合計 ~30min ギリギリだったため 45min に再引き上げ。
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
 
