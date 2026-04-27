@@ -50,17 +50,18 @@ collect.yml (UTC 21:00 = JST 06:00)
   → 4 ソース (hatena / zenn / hackernews / stackexchange) 並列取得
   → raw_signals に UNIQUE(source, external_id) で重複除外 upsert
 
-analyze.yml (UTC 21:30 = JST 06:30、timeout 30min)
+analyze.yml (UTC 21:30 = JST 06:30、timeout 45min)
   → src/analyze.ts
   → raw_signals (processed=false, 直近 24h) を Haiku でクラスタリング
     (aggregator_bundles ≥3 / combinator_pairs ≥2 / gap_candidates ≥1 の 3 種類に分類)
   → Sonnet × 3 役割を並列実行してアイデア起草 (集約者 / 結合者 / 隙間発見者)
-  → 合流して raw_score DESC で Top 10 を Tavily 競合検索 + Sonnet 3 軸スコア
+  → 合流 → 役割間 dedup → 全候補を raw_score DESC で順に Tavily 競合検索 + Sonnet 3 軸スコア
+    (Top N で絞らない設計: 足切り後に Top 5 を取る構造なので、分母が小さいと配信 0 件になりやすい)
   → 足切り (market_score >= 3 AND competition_score >= 3 AND distribution リスク high なし)
     → weighted_score DESC で Top 5 を ideas に insert、signals を processed=true 更新
     (技術難度の足切りは無し: 個人開発する意義があるアイデアは難度が高くても残す方針)
 
-deliver.yml (UTC 22:30 = JST 07:30、analyze から 30min マージン)
+deliver.yml (UTC 22:30 = JST 07:30、analyze timeout 満了から 15min マージン)
   → src/deliver.ts
   → ideas (delivered_at IS NULL, 直近 24h, total_score DESC) Top 5 を選択
   → Markdown + HTML 生成 → Resend 送信
@@ -108,7 +109,7 @@ Stack Exchange を主要ソースに据えた (SE 15 サイト × sort=month/hot
 
 現状の有効化箇所:
 - `sonnet-aggregator.ts` / `sonnet-combinator.ts` / `sonnet-gap-finder.ts`: 各役割内で複数バンドルを順次処理する時にヒット
-- `sonnet.ts` (3 軸スコアリング): Top 10 を連続呼び出しするので 2 回目以降ヒット
+- `sonnet.ts` (3 軸スコアリング): dedup 後の全候補を連続呼び出しするので 2 回目以降ヒット
 
 Haiku クラスタリングは 1 回/日のみなので cache は付けない (書き込みコストで損になる)。
 

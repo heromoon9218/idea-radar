@@ -3,8 +3,9 @@ name: deliver
 on:
   schedule:
     # UTC 22:30 = JST 翌朝 07:30。
-    # analyze.yml は UTC 21:30 開始 / timeout 30min (最長 UTC 22:00 終了) なので、
-    # analyze 完了から deliver 開始まで 30min のマージンを確保する。
+    # analyze.yml は UTC 21:30 開始 / timeout 45min (最長 UTC 22:15 終了) なので、
+    # analyze 完了から deliver 開始まで 15min のマージンを確保する。
+    # 通常 analyze は 25-30min 程度で終わるため実マージンはより大きい。
     - cron: '30 22 * * *'
   workflow_dispatch:
 

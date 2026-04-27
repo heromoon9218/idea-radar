@@ -4,7 +4,7 @@
 //   3. Sonnet × 3 役割並列: 集約者 / 結合者 / 隙間発見者 がそれぞれアイデアを起草
 //      (各役割内は DRAFT_CONCURRENCY で同時実行数を制限、B-3 で fermi_estimate を必須化)
 //   4. 合流 → 役割間で title+category 一致するアイデアを dedup
-//   5. raw_score DESC で Top 10 → 1 件ずつ:
+//   5. dedup 後の全候補を raw_score DESC でソート → 1 件ずつ:
 //        a. Tavily 並列検索 (英語 / 日本語 / 機能語の最大 3 クエリ union) [B-4]
 //        b. Sonnet 3 軸スコアリング (初回)
 //        c. 赤旗スキャン (risk_auditor) + Devil's advocate 2-pass 再スコア を Promise.all [B-1/B-2]
@@ -65,10 +65,10 @@ const WINDOW_HOURS = 24;
 //   = 定常 ~250-350 件。初回 ingest 時は SE の sort=month/hot 2 クエリ合計で 700-800 件まで伸びる想定。
 // 上限を 1200 に置いているのは、この初回スパイクを取りこぼさず 1 日で処理し切るため
 // (MAX_SIGNALS_PER_BATCH を超えた分は 24h window から外れて永久に未処理になる)。
-// Haiku のコンテキストウィンドウは 200k+ で余裕があり、Sonnet × 3 役割は Top 10 のみがコスト対象なので
-// signal 数増加がコストに線形比例しないため、上限引き上げは安全。
+// Haiku のコンテキストウィンドウは 200k+ で余裕があり、Sonnet drafter のコストは
+// クラスタ数 (= AGGREGATOR_MAX_INPUTS + COMBINATOR_MAX_INPUTS + GAP_MAX_INPUTS の合計上限)
+// で頭打ちになるため、signal 数増加がコストに線形比例せず、上限引き上げは安全。
 const MAX_SIGNALS_PER_BATCH = 1200;
-const SONNET_TOP_N = 10;
 const INSERT_TOP_N = 5;
 
 // Sonnet drafter の同時実行数上限 (役割内)。
@@ -87,8 +87,8 @@ const DRAFT_CONCURRENCY = 1;
 // 各 drafter 役割への入力上限。Haiku のクラスタリング結果がスパイクすると
 // (実測: 2026-04-24 gap=72 / 2026-04-26 gap=59) DRAFT_CONCURRENCY=1 直列実行で
 // gap_finder だけで 30min の workflow timeout を食い潰し analyze 全体が cancel される。
-// 後段の SONNET_TOP_N=10 で 9 割近くの候補は捨てられる構造なので、入力段で上限を切っても
-// 最終アウトプット品質への影響は限定的 (signal_ids 数の多い順 = エビデンス強い順にトリム)。
+// 純粋に drafter フェーズの所要時間を timeout 内に収めるためのキャップで、エビデンス強度
+// (= 紐づく signal の数) 降順でトリムするので最終アウトプット品質への影響は限定的。
 // 値の根拠 (1 ドラフト ~30-40s, 30min timeout 前提):
 //   - 通常時の各役割の出力数: aggregator 0-8 / combinator 4-11 / gap 6-30
 //   - 上限を超えるのは月数回のスパイク (SE 主要化以降)
@@ -104,8 +104,12 @@ const GAP_MAX_INPUTS = 25;
 const SEARCH_MIN_INTERVAL_MS = 300;
 
 // Sprint B-4: 1 candidate あたり最大クエリ数。
-// 無料枠は 1,000 req/月なので SONNET_TOP_N (10) × MAX_QUERIES_PER_CANDIDATE (3) × 30 日 = 900 req/月 が上限。
-// 引き上げる場合は月間 req 数を再計算し、有料プラン移行 or TOP_N 削減が必要になる。
+// dedup 後の全候補をスコアリングするため、Tavily 月間 req 数は概ね
+// (候補数 ~30) × MAX_QUERIES_PER_CANDIDATE (3) × バッチ頻度に比例する。
+// 週次バッチ移行後は ~30 × 3 × 4 ≈ 360 req/月で無料枠 1,000 内に収まる前提。
+// 日次バッチ運用中は ~30 × 3 × 30 ≈ 2,700 req/月で月後半に 429 を踏むが、
+// searchParallel が status='failed' を返し scoreIdea が description のみで継続する fail-soft 経路で吸収する
+// (市場性スコアは保守的に振れるが pipeline は止まらない)。
 const MAX_QUERIES_PER_CANDIDATE = 3;
 
 const CATEGORY_EN: Record<IdeaCategory, string> = {
@@ -349,15 +353,15 @@ function buildTavilyQueries(c: RoleTaggedCandidate): string[] {
   return queries.slice(0, MAX_QUERIES_PER_CANDIDATE);
 }
 
-async function scoreTopCandidates(
+async function scoreAllCandidates(
   candidates: RoleTaggedCandidate[],
   bandConfig: BandConfig,
 ): Promise<ScoredWithWeight[]> {
-  const top = [...candidates]
-    .sort((a, b) => b.raw_score - a.raw_score)
-    .slice(0, SONNET_TOP_N);
+  // raw_score DESC で並べるのは「Tavily 429 を踏んで途中で fail-soft に落ちたとき
+  // でも上位候補を先に通電させて評価精度を保つ」ための保険。Top N で切らず全件処理する。
+  const ordered = [...candidates].sort((a, b) => b.raw_score - a.raw_score);
 
-  const roleCount = top.reduce<Record<IdeaRole, number>>(
+  const roleCount = ordered.reduce<Record<IdeaRole, number>>(
     (acc, c) => {
       acc[c.role] = (acc[c.role] ?? 0) + 1;
       return acc;
@@ -365,13 +369,13 @@ async function scoreTopCandidates(
     { aggregator: 0, combinator: 0, gap_finder: 0 },
   );
   console.log(
-    `[analyze] sonnet_top=${top.length} by_role aggregator=${roleCount.aggregator} combinator=${roleCount.combinator} gap_finder=${roleCount.gap_finder}`,
+    `[analyze] sonnet_input=${ordered.length} by_role aggregator=${roleCount.aggregator} combinator=${roleCount.combinator} gap_finder=${roleCount.gap_finder}`,
   );
 
   const scored: ScoredWithWeight[] = [];
   let lastSearchAt = 0;
 
-  for (const c of top) {
+  for (const c of ordered) {
     const wait = lastSearchAt + SEARCH_MIN_INTERVAL_MS - Date.now();
     if (wait > 0) await sleep(wait);
 
@@ -636,12 +640,12 @@ async function main(): Promise<void> {
     console.log(`[analyze] after_dedup=${candidates.length} removed=${removed}`);
   }
 
-  // 4) Top 10 を Tavily + Sonnet 3 軸スコアリング (帯依存 rubric)
-  const scored = await scoreTopCandidates(candidates, bandConfig);
+  // 4) 全候補を Tavily + Sonnet 3 軸スコアリング (帯依存 rubric)
+  const scored = await scoreAllCandidates(candidates, bandConfig);
   console.log(`[analyze] sonnet_scored=${scored.length}`);
 
   // 5) 足切り (3 条件 AND):
-  //      a. market_score  >= MARKET_SCORE_MIN  (市場性が確保できないアイデアは月 ¥10k に届かない)
+  //      a. market_score  >= MARKET_SCORE_MIN  (市場性が確保できないアイデアは月 ¥50k に届かない)
   //      b. competition_score >= COMPETITION_SCORE_MIN (競合に埋もれるアイデアは個人で勝てない)
   //      c. risk_flags に category='distribution' && severity='high' が含まれないこと
   //         (営業組織必須・大規模広告必須・代理店ネットワーク必須・SNS バズ前提 = 個人開発の流通域を超える)
