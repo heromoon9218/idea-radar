@@ -74,8 +74,13 @@ type LenientGapCandidate = LenientHaikuClusterOutput['gap_candidates'][number];
 // 対策として buildUserPrompt 側で content を HAIKU_CONTENT_MAX_CHARS に切り詰めてから JSON 化する。
 // 700 signals × ~200 tokens/signal (切り詰め後) + system/schema 5k ≒ 145k tokens で収まる想定。
 export const HAIKU_MAX_SIGNALS = 700;
-// 出力は 3 種類の配列で、合計 30-60 個程度を想定。余裕を持って 8192 token。
-const HAIKU_MAX_TOKENS = 8192;
+// 出力は 3 種類の配列で、通常運用では 2.5-3k tokens で完結する (実測: cluster_input=187-700
+// で out=2,580-3,102)。ただし cluster_input=200+ のスパイク時に bundle 数が比例増しして
+// 8192 上限を超えて JSON が文字列リテラル途中で切れるケースが発生 (2026-04-28 run で
+// "Unterminated string in JSON at position 13889" でパース失敗)。Haiku 4.5 の output 上限は
+// 64k tokens なので余裕を持って 16384 に拡張。通常運用にはコスト影響なし、
+// truncate 発生時のみ追加 tokens を消費する。
+const HAIKU_MAX_TOKENS = 16384;
 // Haiku は痛みのクラスタリング判定だけ行うので本文の細部は不要。
 // SE は collection 時点で 1500 chars cap、Hatena/Zenn/HN は元から短い。
 // 800 chars あればクラスタ判定の根拠は読み取れる (Sonnet drafter は signalsById 経由で
