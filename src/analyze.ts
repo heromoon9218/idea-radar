@@ -84,6 +84,18 @@ const INSERT_TOP_N = 5;
 //   ヒットし、2 件目以降のコストが 10% になる。
 const DRAFT_CONCURRENCY = 1;
 
+// scoreAllCandidates の candidate-level 並列度。
+// 1 candidate あたり Sonnet 呼び出しは {score, risk_audit, devils_advocate} の 3 本
+// (risk + devils は Promise.all で同時発火)。1 candidate 完了に ~40s。
+// 値を 2 にしている根拠 (Sonnet 4.6 の TPM 8,000 output tokens/min 制限):
+//   - 1 candidate の出力 tokens は score(800) + risk(700) + devils(800) ≈ 2,300
+//   - 並列度 2 で同時 2 candidates 走行 → 2,300 × 2 ÷ 40s × 60s ≈ 6,900 tok/min ← 枠内
+//   - 並列度 3 だと ~10,350 tok/min で 8f1f7a6 で踏んだのと同じ 429 を再発する
+// PR #46 の Top N 撤廃で sonnet_input が 30→65+ に増え、逐次 (=1) では 45min
+// workflow timeout を超える (実測: 2026-04-27 run で 36/65 件処理時点で timeout)。
+// 2 並列で 65×40s/2 = ~22min となり drafter 15min と合わせて 37min で収まる。
+const SCORE_CONCURRENCY = 2;
+
 // 各 drafter 役割への入力上限。Haiku のクラスタリング結果がスパイクすると
 // (実測: 2026-04-24 gap=72 / 2026-04-26 gap=59) DRAFT_CONCURRENCY=1 直列実行で
 // gap_finder だけで 30min の workflow timeout を食い潰し analyze 全体が cancel される。
@@ -98,10 +110,6 @@ const DRAFT_CONCURRENCY = 1;
 const AGGREGATOR_MAX_INPUTS = 15;
 const COMBINATOR_MAX_INPUTS = 20;
 const GAP_MAX_INPUTS = 25;
-
-// Tavily の無料プランで明示的な per-second レート制限は公表されていないが、
-// 10 req/バッチを数秒間隔で叩く保険として 300ms の最小間隔を置く。
-const SEARCH_MIN_INTERVAL_MS = 300;
 
 // Sprint B-4: 1 candidate あたり最大クエリ数。
 // dedup 後の全候補をスコアリングするため、Tavily 月間 req 数は概ね
@@ -128,10 +136,6 @@ const CATEGORY_JA_FOR_QUERY: Record<IdeaCategory, string> = {
   ai: 'AI',
   other: '',
 };
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 interface ScoredWithWeight extends SonnetScoredIdea {
   role: IdeaRole;
@@ -372,13 +376,13 @@ async function scoreAllCandidates(
     `[analyze] sonnet_input=${ordered.length} by_role aggregator=${roleCount.aggregator} combinator=${roleCount.combinator} gap_finder=${roleCount.gap_finder}`,
   );
 
-  const scored: ScoredWithWeight[] = [];
-  let lastSearchAt = 0;
-
-  for (const c of ordered) {
-    const wait = lastSearchAt + SEARCH_MIN_INTERVAL_MS - Date.now();
-    if (wait > 0) await sleep(wait);
-
+  // 1 candidate あたりの scoring 処理。Tavily 競合検索 → Sonnet 3 軸スコア
+  // → risk_audit + devils_advocate 並列の順で Sonnet を計 3 回叩く。
+  // mapWithLimit で SCORE_CONCURRENCY 並列に走る前提で、グローバルな
+  // SEARCH_MIN_INTERVAL_MS guard は撤去 (並列度 2 × 1 candidate あたり 3 クエリ
+  // = 同時 ~6 Tavily req のバースト。無料枠 1,000/月でも per-second 制限は
+  // 公表されておらず、searchParallel 側の 429 fail-soft で吸収する)。
+  const scoreOne = async (c: RoleTaggedCandidate): Promise<ScoredWithWeight | null> => {
     // Sprint B-4: 2-3 本並列検索で日本語競合も拾う。
     const queries = buildTavilyQueries(c);
     let hits: TavilySearchResult[] = [];
@@ -397,7 +401,6 @@ async function scoreAllCandidates(
         err instanceof Error ? err.message : err,
       );
     }
-    lastSearchAt = Date.now();
 
     let initial: SonnetScoredIdea;
     try {
@@ -410,7 +413,7 @@ async function scoreAllCandidates(
         `[analyze] sonnet score failed for "${c.title}":`,
         err instanceof Error ? err.message : err,
       );
-      continue;
+      return null;
     }
 
     // Sprint B-1 / B-2: リスク監査 + Devil's advocate 2-pass を並列実行。
@@ -493,7 +496,7 @@ async function scoreAllCandidates(
       bandConfig.weights,
       c.distribution_hypothesis,
     );
-    scored.push({
+    return {
       ...final,
       role: c.role,
       weighted_score,
@@ -501,7 +504,20 @@ async function scoreAllCandidates(
       distribution_hypothesis: c.distribution_hypothesis,
       risk_flags,
       devils_advocate,
-    });
+    };
+  };
+
+  const settled = await mapWithLimit(ordered, SCORE_CONCURRENCY, scoreOne);
+  const scored: ScoredWithWeight[] = [];
+  for (const r of settled) {
+    if (r.status === 'fulfilled' && r.value !== null) {
+      scored.push(r.value);
+    } else if (r.status === 'rejected') {
+      console.warn(
+        '[analyze] scoreOne unexpected rejection:',
+        r.reason instanceof Error ? r.reason.message : r.reason,
+      );
+    }
   }
 
   return scored;
