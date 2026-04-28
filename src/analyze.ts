@@ -172,24 +172,53 @@ async function fetchUnprocessedSignals(): Promise<SignalRow[]> {
 // HN の metadata.story_type は Haiku プロンプトで参照させるので hn_story_type に昇格。
 // Stack Exchange の metadata.se_site も同様に se_site に昇格 (サイトごとに痛みの領域が異なるため)。
 // 異常データはログに出してスキップ。
+//
+// 2026-04-29 拡張:
+//  - HN の metadata.top_comments (show/ask/launch HN のトップ 5 コメント) があれば
+//    content と結合して Haiku に渡す (痛みクラスタリングの主要材料)。
+//  - metadata.heavy_domain (重いドメイン早期 filter) は別途 toHaikuInputs 後に
+//    Haiku プロンプト経由で扱うので、ここでは何もしない。
 function toHaikuInputs(rows: SignalRow[]): HaikuSignalInput[] {
   const out: HaikuSignalInput[] = [];
   for (const r of rows) {
+    let mergedContent = r.content;
     const enriched: Record<string, unknown> = {
       id: r.id,
       source: r.source,
       title: r.title,
-      content: r.content,
       url: r.url,
     };
     if (r.source === 'hackernews' && r.metadata) {
       const parsed = HnStoryTypeSchema.safeParse(r.metadata.story_type);
       if (parsed.success) enriched.hn_story_type = parsed.data;
+      // top_comments を content に追記。Haiku は title + content のみを見るので、
+      // ここで結合しないとコメント情報が捨てられる。
+      const tc = r.metadata.top_comments;
+      if (
+        Array.isArray(tc) &&
+        tc.length > 0 &&
+        tc.every((c) => typeof c === 'string' && c.length > 0)
+      ) {
+        const block = tc
+          .map((c, i) => `[Comment ${i + 1}] ${c as string}`)
+          .join('\n');
+        const base = mergedContent ?? '';
+        mergedContent =
+          base.length > 0
+            ? `${base}\n\n--- HN Top Comments ---\n${block}`
+            : `--- HN Top Comments ---\n${block}`;
+      }
     }
     if (r.source === 'stackexchange' && r.metadata) {
       const site = r.metadata.se_site;
       if (typeof site === 'string' && site.length > 0) enriched.se_site = site;
     }
+    // ソース横断の metadata.heavy_domain / metadata.payment_intent を Haiku 入力に lift。
+    if (r.metadata) {
+      if (r.metadata.heavy_domain === true) enriched.heavy_domain = true;
+      if (r.metadata.payment_intent === true) enriched.payment_intent = true;
+    }
+    enriched.content = mergedContent;
     const parsed = HaikuSignalInputSchema.safeParse(enriched);
     if (!parsed.success) {
       console.warn(`[analyze] drop invalid signal ${r.id}: ${parsed.error.message}`);
@@ -357,6 +386,18 @@ function buildTavilyQueries(c: RoleTaggedCandidate): string[] {
   return queries.slice(0, MAX_QUERIES_PER_CANDIDATE);
 }
 
+// 2026-04-29: empty フォールバック用クエリ。1 回目検索で 0 件だった場合に 1 本だけ追加発行する。
+// 元の 3 クエリは title 中心 (プロダクト名 / 機能名) なので、empty のときは
+// 「痛みベースのクエリ」に視点を変える: why から名詞句 + alternative を組む。
+// failed (= 認証 / ネットワークエラー) の時は呼ばない (empty とは原因が違うため)。
+function buildFallbackQuery(c: RoleTaggedCandidate): string | null {
+  const whyHead = c.why.slice(0, 80).replace(/[。\.].*$/, '').trim();
+  if (whyHead.length === 0) return null;
+  const cat = CATEGORY_EN[c.category];
+  // 「痛みフレーズ」 + alternative + カテゴリ。Tavily は自然文クエリを処理するので構文整形は不要。
+  return `${whyHead} ${cat} alternative tool`.trim();
+}
+
 async function scoreAllCandidates(
   candidates: RoleTaggedCandidate[],
   bandConfig: BandConfig,
@@ -384,16 +425,39 @@ async function scoreAllCandidates(
   // 公表されておらず、searchParallel 側の 429 fail-soft で吸収する)。
   const scoreOne = async (c: RoleTaggedCandidate): Promise<ScoredWithWeight | null> => {
     // Sprint B-4: 2-3 本並列検索で日本語競合も拾う。
+    // 2026-04-29: empty (= 全クエリ成功 0 件) のとき why から組み立てた痛みベースの fallback を 1 本追加発行。
+    // これは「title が specific すぎて競合に当たらないが、別の用語で類似サービスがある」ケースを救う。
+    // failed (= ネットワーク / 認証エラー) のときはリトライしない (原因が変わらず credit を浪費するため)。
     const queries = buildTavilyQueries(c);
     let hits: TavilySearchResult[] = [];
     let status: TavilyStatus = 'ok';
     try {
-      const parallel = await searchParallel(queries, 5, 8);
+      let parallel = await searchParallel(queries, 5, 8);
+      console.log(
+        `[tavily] queries=${parallel.queriesAttempted} failed=${parallel.queriesFailed} hits=${parallel.results.length} status=${parallel.status} title="${c.title.slice(0, 40)}"`,
+      );
+      if (parallel.status === 'empty') {
+        const fallback = buildFallbackQuery(c);
+        if (fallback) {
+          console.log(
+            `[tavily] empty, retrying fallback="${fallback.slice(0, 60)}" title="${c.title.slice(0, 40)}"`,
+          );
+          const retry = await searchParallel([fallback], 5, 8);
+          if (retry.status === 'ok' && retry.results.length > 0) {
+            parallel = {
+              results: retry.results,
+              status: 'ok',
+              queriesAttempted: parallel.queriesAttempted + retry.queriesAttempted,
+              queriesFailed: parallel.queriesFailed + retry.queriesFailed,
+            };
+            console.log(
+              `[tavily] fallback recovered ${retry.results.length} hits title="${c.title.slice(0, 40)}"`,
+            );
+          }
+        }
+      }
       hits = parallel.results;
       status = parallel.status;
-      console.log(
-        `[tavily] queries=${parallel.queriesAttempted} failed=${parallel.queriesFailed} hits=${hits.length} status=${status} title="${c.title.slice(0, 40)}"`,
-      );
     } catch (err) {
       status = 'failed';
       console.warn(
