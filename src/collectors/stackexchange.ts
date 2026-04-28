@@ -1,10 +1,20 @@
-// Stack Exchange API 経由で非技術系の生活ペイン質問を収集する。
+// Stack Exchange API 経由で非技術系の生活ペイン + 支払文化のあるニッチペインを収集する。
 // 本ツールの**主要ソース**。技術系 3 ソース (はてブ / Zenn / HN) の「自作できる・無料志向」バイアスを
-// 緩和するため 15 サイトに拡張して主要ソースに据えている (3 サイトから拡張時の経緯は git log 参照)。
+// 緩和するため複数サイトに拡張して主要ソースに据えている (3 サイトから拡張時の経緯は git log 参照)。
 //
-// 対象サイト (15):
-//   lifehacks / parenting / money / workplace / cooking / diy / interpersonal /
-//   travel / pets / gardening / fitness / law / outdoors / expatriates / academia
+// 対象サイト (14):
+//   parenting / money / workplace / cooking / diy / travel / pets / gardening / fitness /
+//   law / outdoors / expatriates / freelancing / pm
+//
+// 2026-04-29 入替: 雑談寄り・支払意欲弱の 3 サイト (lifehacks / interpersonal / academia) を削除し、
+//   支払文化が強い 2 サイト (freelancing / pm) に差し替え (差し引き -1 で 14 サイト)。
+//   - lifehacks: 雑多な生活ハック、ツール購買意欲が薄い
+//   - interpersonal: 個人感情の悩みが中心、SaaS 化が遠い
+//   - academia: 大学経費依存で個人開発 SaaS の支払者にならない
+//   - freelancing: 請求・契約・税務の実務痛み (個人事業主は道具にお金を払う層)
+//   - pm: プロジェクト管理 (PM はツール導入決裁権あり、B2B 小口の主戦場)
+//   ※ Personal Productivity SE は SE Network から廃止されているため採用不可
+//      (smoke 実行時に site=productivity が HTTP 400 を返した、2026-04-29 確認)。
 //
 // エンドポイント:
 //   GET https://api.stackexchange.com/2.3/questions
@@ -25,7 +35,7 @@
 // sinceMinutes の扱い:
 //   敢えて無視する (hatena コレクタと同じ設計)。sort=month/hot は API 側で時間窓が組み込まれており、
 //   dedup は raw_signals の UNIQUE(source, external_id) に任せる。
-//   SE サイトの中には traffic が非常に低いもの (lifehacks / fitness / expatriates 等) があり、
+//   SE サイトの中には traffic が非常に低いもの (freelancing / fitness / expatriates 等) があり、
 //   24h 窓では 0-1 件になってしまうため。
 //
 // metadata:
@@ -39,20 +49,22 @@
 import { fetchWithRetry } from '../lib/fetch-retry.js';
 import type { RawSignalInput } from '../types.js';
 
-// 対象サイト 15 個。カテゴリバランス:
-//   生活全般: lifehacks / diy / cooking / gardening / outdoors
-//   家族・人間関係: parenting / interpersonal / pets
+// 対象サイト 14 個。カテゴリバランス (2026-04-29 入替後):
+//   生活全般: diy / cooking / gardening / outdoors
+//   家族: parenting / pets
 //   金・仕事・規制: money / workplace / law
 //   身体・ライフスタイル: fitness / travel / expatriates
-//   学習・研究: academia (※ CS 学生が多いのでやや技術寄りだが、研究生活の一般ペインを拾える)
+//   支払文化系 (新規): freelancing / pm
+//
+// 削除したサイト: lifehacks (雑談) / interpersonal (個人感情) / academia (大学経費依存)。
+// productivity は SE Network 廃止済みのため採用不可。
+// 削除理由は本ファイル冒頭の「2026-04-29 入替」コメント参照。
 const SITES: string[] = [
-  'lifehacks',
   'parenting',
   'money',
   'workplace',
   'cooking',
   'diy',
-  'interpersonal',
   'travel',
   'pets',
   'gardening',
@@ -60,7 +72,8 @@ const SITES: string[] = [
   'law',
   'outdoors',
   'expatriates',
-  'academia',
+  'freelancing',
+  'pm',
 ];
 
 // 2 種類のクエリを並走させる。sort=month = 過去 30 日最高スコア、sort=hot = 今活動中。

@@ -4,10 +4,10 @@ export const SourceTypeSchema = z.enum([
   'hatena',
   'zenn',
   'hackernews',
-  // 非技術系の生活ペインを拾うためのソース:
-  //   stackexchange = 15 サイト (lifehacks / parenting / money / workplace / cooking / diy /
-  //                   interpersonal / travel / pets / gardening / fitness / law / outdoors /
-  //                   expatriates / academia) を束ねる。サイト一覧は src/collectors/stackexchange.ts:SITES。
+  // 非技術系の生活ペイン + 支払文化系ニッチを拾うためのソース:
+  //   stackexchange = 14 サイト (parenting / money / workplace / cooking / diy / travel / pets /
+  //                   gardening / fitness / law / outdoors / expatriates / freelancing /
+  //                   pm) を束ねる。サイト一覧は src/collectors/stackexchange.ts:SITES。
   //                   score / view_count / answer_count の定量メタが取れるため demand-summary と相性が良い
   'stackexchange',
 ]);
@@ -51,12 +51,20 @@ export const HaikuSignalInputSchema = z.object({
   // HN のみ: タイトル先頭の Show/Ask/Launch/Tell HN 分類。
   // それ以外のソースでは undefined。
   hn_story_type: HnStoryTypeSchema.optional(),
-  // Stack Exchange のみ: どのサイト由来か (15 サイト: lifehacks / parenting / money /
-  // workplace / cooking / diy / interpersonal / travel / pets / gardening / fitness / law /
-  // outdoors / expatriates / academia)。サイト一覧は src/collectors/stackexchange.ts:SITES。
-  // Haiku が「生活ハック系」「育児系」「家計・副業系」「職場系」等で痛みの質を判断できるように渡す。
+  // Stack Exchange のみ: どのサイト由来か (14 サイト: parenting / money / workplace /
+  // cooking / diy / travel / pets / gardening / fitness / law / outdoors / expatriates /
+  // freelancing / pm)。サイト一覧は src/collectors/stackexchange.ts:SITES。
+  // Haiku が「育児系」「家計・副業系」「職場系」「フリーランス実務系」「PM 系」等で痛みの質を判断できるように渡す。
   // それ以外のソースでは undefined。
   se_site: z.string().optional(),
+  // 2026-04-29 追加: collect 時に detectHeavyDomain でマッチした signal に true が立つ。
+  // 重いドメイン (士業 / 医療 / 介護 / 飲食店経営 / 中小製造 / エンプラ等) は個人開発の
+  // 流通域を超えるため、Haiku 側でクラスタリング優先度を下げる。
+  heavy_domain: z.boolean().optional(),
+  // 2026-04-29 追加: HN normal で支払意欲キーワードがマッチして救済された signal に true が立つ。
+  // 「I'd pay $X for...」のような支払文化シグナルの目印。Haiku 側で aggregator/combinator
+  // バンドルへの優先採用に使う。
+  payment_intent: z.boolean().optional(),
 });
 export type HaikuSignalInput = z.infer<typeof HaikuSignalInputSchema>;
 
