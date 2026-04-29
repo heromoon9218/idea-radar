@@ -210,11 +210,15 @@ export const SonnetScoredIdeaSchema = z.object({
 });
 export type SonnetScoredIdea = z.infer<typeof SonnetScoredIdeaSchema>;
 
-// ---- Sprint B-1: Devil's advocate 2-pass ----
-// 初回スコア後に Sonnet に「却下すべき 3 つの理由」を挙げさせ、その上で 3 軸を再スコア。
+// ---- Sprint B-1: Devil's advocate 2-pass (両側評価版) ----
+// 初回スコア後に Sonnet に「却下理由」と「過小評価された強み」の **両方** を挙げさせ、
+// 両者の重みを比較して 3 軸を再スコアする。
+// 旧版 (rejection_reasons のみ) は 56/56 件が delta_sum マイナスに振れる片側バイアスが
+// 観測されたため、強み側の論拠も等しく挙げさせる構造に変更。
 // reconsidered_* を最終値として insert し、ideas.devils_advocate に reasoning のみ残す。
 export const DevilsAdvocateOutputSchema = z.object({
-  rejection_reasons: z.array(z.string().min(1)).min(1).max(5),
+  rejection_reasons: z.array(z.string().min(1)).max(5),
+  upgrade_reasons: z.array(z.string().min(1)).max(5),
   reconsidered_market_score: z.number().int().min(1).max(5),
   reconsidered_tech_score: z.number().int().min(1).max(5),
   reconsidered_competition_score: z.number().int().min(1).max(5),
@@ -222,11 +226,14 @@ export const DevilsAdvocateOutputSchema = z.object({
 });
 export type DevilsAdvocateOutput = z.infer<typeof DevilsAdvocateOutputSchema>;
 
-// DB 保持用の ideas.devils_advocate jsonb 構造 (初回スコアと却下理由を audit trail として残す)。
+// DB 保持用の ideas.devils_advocate jsonb 構造 (初回スコアと両側理由を audit trail として残す)。
 // 運用方針: この jsonb は DB 内のレビュー用途 (手動 SQL / 将来の振り返り UI) 専用で、
 // deliver (render-markdown) では表示しない。Markdown に出るのは rescore 後の 3 軸スコアのみ。
+// 旧スキーマ (rejection_reasons のみ) で書き込まれた行は upgrade_reasons が undefined として読まれる
+// — 既存読み出し側は upgrade_reasons の不在を許容する必要がある。
 export const DevilsAdvocatePersistedSchema = z.object({
   rejection_reasons: z.array(z.string()),
+  upgrade_reasons: z.array(z.string()),
   verdict: z.string(),
   initial_scores: z.object({
     market: z.number().int(),

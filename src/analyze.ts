@@ -512,6 +512,7 @@ async function scoreAllCandidates(
     let finalComp = initial.competition_score;
     let devils_advocate: DevilsAdvocatePersisted = {
       rejection_reasons: [],
+      upgrade_reasons: [],
       verdict: 'devils_advocate 呼び出しが失敗 / スキップされたため初回スコアをそのまま採用',
       initial_scores: {
         market: initial.market_score,
@@ -526,6 +527,7 @@ async function scoreAllCandidates(
       finalComp = d.reconsidered_competition_score;
       devils_advocate = {
         rejection_reasons: d.rejection_reasons,
+        upgrade_reasons: d.upgrade_reasons,
         verdict: d.verdict,
         initial_scores: {
           market: initial.market_score,
@@ -538,7 +540,7 @@ async function scoreAllCandidates(
         (finalTech - initial.tech_score) +
         (finalComp - initial.competition_score);
       console.log(
-        `[analyze] devils_advocate title="${c.title.slice(0, 40)}" reasons=${d.rejection_reasons.length} delta_sum=${delta >= 0 ? '+' : ''}${delta}`,
+        `[analyze] devils_advocate title="${c.title.slice(0, 40)}" reject=${d.rejection_reasons.length} upgrade=${d.upgrade_reasons.length} delta_sum=${delta >= 0 ? '+' : ''}${delta}`,
       );
     } else {
       console.warn(
