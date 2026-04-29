@@ -512,6 +512,7 @@ async function scoreAllCandidates(
     let finalComp = initial.competition_score;
     let devils_advocate: DevilsAdvocatePersisted = {
       rejection_reasons: [],
+      upgrade_reasons: [],
       verdict: 'devils_advocate 呼び出しが失敗 / スキップされたため初回スコアをそのまま採用',
       initial_scores: {
         market: initial.market_score,
@@ -521,25 +522,47 @@ async function scoreAllCandidates(
     };
     if (devilSettled.status === 'fulfilled') {
       const d = devilSettled.value;
-      finalMarket = d.reconsidered_market_score;
-      finalTech = d.reconsidered_tech_score;
-      finalComp = d.reconsidered_competition_score;
-      devils_advocate = {
-        rejection_reasons: d.rejection_reasons,
-        verdict: d.verdict,
-        initial_scores: {
-          market: initial.market_score,
-          tech: initial.tech_score,
-          competition: initial.competition_score,
-        },
-      };
-      const delta =
-        (finalMarket - initial.market_score) +
-        (finalTech - initial.tech_score) +
-        (finalComp - initial.competition_score);
-      console.log(
-        `[analyze] devils_advocate title="${c.title.slice(0, 40)}" reasons=${d.rejection_reasons.length} delta_sum=${delta >= 0 ? '+' : ''}${delta}`,
-      );
+      // 両側 0 件ガード: schema は両方 .max(5) のみで .min(0) 相当なので、
+      // model がドリフトして両側 [] を返すと「論拠なしで再採点」が成立してしまう。
+      // 両側空のときは初回スコア維持に倒し、verdict にその旨を残す。
+      const bothEmpty =
+        d.rejection_reasons.length === 0 && d.upgrade_reasons.length === 0;
+      if (bothEmpty) {
+        console.warn(
+          `[analyze] devils_advocate returned both reasons empty for "${c.title.slice(0, 40)}" — initial scores 維持`,
+        );
+        devils_advocate = {
+          rejection_reasons: [],
+          upgrade_reasons: [],
+          verdict: '両側理由が空のため再採点を破棄し初回スコアを維持',
+          initial_scores: {
+            market: initial.market_score,
+            tech: initial.tech_score,
+            competition: initial.competition_score,
+          },
+        };
+      } else {
+        finalMarket = d.reconsidered_market_score;
+        finalTech = d.reconsidered_tech_score;
+        finalComp = d.reconsidered_competition_score;
+        devils_advocate = {
+          rejection_reasons: d.rejection_reasons,
+          upgrade_reasons: d.upgrade_reasons,
+          verdict: d.verdict,
+          initial_scores: {
+            market: initial.market_score,
+            tech: initial.tech_score,
+            competition: initial.competition_score,
+          },
+        };
+        const delta =
+          (finalMarket - initial.market_score) +
+          (finalTech - initial.tech_score) +
+          (finalComp - initial.competition_score);
+        console.log(
+          `[analyze] devils_advocate title="${c.title.slice(0, 40)}" reject=${d.rejection_reasons.length} upgrade=${d.upgrade_reasons.length} delta_sum=${delta >= 0 ? '+' : ''}${delta}`,
+        );
+      }
     } else {
       console.warn(
         `[analyze] devils_advocate failed for "${c.title}":`,

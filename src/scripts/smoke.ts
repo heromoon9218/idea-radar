@@ -23,6 +23,7 @@ import { draftFromCombinatorPair } from '../analyzers/sonnet-combinator.js';
 import { draftFromGapCandidate } from '../analyzers/sonnet-gap-finder.js';
 import { scoreIdea, type TavilyStatus } from '../analyzers/sonnet.js';
 import { auditRisks } from '../analyzers/sonnet-risk-auditor.js';
+import { critiqueAndRescore } from '../analyzers/sonnet-devils-advocate.js';
 import {
   computeWeightedScore,
   describeBandConfig,
@@ -273,6 +274,29 @@ async function smokeAnalyze(): Promise<void> {
   } catch (err) {
     console.warn(
       '[smoke-analyze] risk_audit failed:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+
+  // 6) devils_advocate (両側評価) を 1 件だけ通電。
+  // 2026-04-29 にプロンプトを「却下理由のみ」→「却下 + 過小評価された強みの両側」に変更したため、
+  // schema parse drift と delta の方向性 (上下どちらにも振れるか) を smoke 段階で観測する。
+  try {
+    const critique = await critiqueAndRescore(scored, {
+      band: bandConfig.band,
+      targetMrr: bandConfig.targetMrr,
+    });
+    const delta =
+      (critique.reconsidered_market_score - scored.market_score) +
+      (critique.reconsidered_tech_score - scored.tech_score) +
+      (critique.reconsidered_competition_score - scored.competition_score);
+    console.log(
+      `[smoke-analyze] devils_advocate reject=${critique.rejection_reasons.length} upgrade=${critique.upgrade_reasons.length} delta_sum=${delta >= 0 ? '+' : ''}${delta}`,
+    );
+    console.log(JSON.stringify(critique, null, 2));
+  } catch (err) {
+    console.warn(
+      '[smoke-analyze] devils_advocate failed:',
       err instanceof Error ? err.message : err,
     );
   }
