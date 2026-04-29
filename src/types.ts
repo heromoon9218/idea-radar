@@ -229,11 +229,11 @@ export type DevilsAdvocateOutput = z.infer<typeof DevilsAdvocateOutputSchema>;
 // DB 保持用の ideas.devils_advocate jsonb 構造 (初回スコアと両側理由を audit trail として残す)。
 // 運用方針: この jsonb は DB 内のレビュー用途 (手動 SQL / 将来の振り返り UI) 専用で、
 // deliver (render-markdown) では表示しない。Markdown に出るのは rescore 後の 3 軸スコアのみ。
-// 旧スキーマ (rejection_reasons のみ) で書き込まれた行は upgrade_reasons が undefined として読まれる
-// — 既存読み出し側は upgrade_reasons の不在を許容する必要がある。
+// 旧スキーマ (rejection_reasons のみ) で書き込まれた行は upgrade_reasons が undefined として
+// 入っているため、parse 経路を作っても落ちないよう .default([]) で許容する。
 export const DevilsAdvocatePersistedSchema = z.object({
-  rejection_reasons: z.array(z.string()),
-  upgrade_reasons: z.array(z.string()),
+  rejection_reasons: z.array(z.string()).default([]),
+  upgrade_reasons: z.array(z.string()).default([]),
   verdict: z.string(),
   initial_scores: z.object({
     market: z.number().int(),
