@@ -134,7 +134,7 @@
 3. 3 役割の候補アイデアを合流 → 役割間 dedup → `raw_score` DESC でソート
    - **Top N で絞らない設計**: 足切り後に Top 5 を取る構造なので、ここで絞ると分母不足で配信 0 件になりやすい（実例: 2026-04-27 に market<3=10/10 で全件足切り）。よって足切りより前で件数を絞らない
 4. dedup 後の全候補を既存の Sonnet スコアリング（3 軸）に渡し、Tavily Search で類似サービス検索 → `competitors` に格納
-   - Tavily 月間 req 数は週次バッチ運用で無料枠 1,000 内に収まる想定。1 chunk あたりの dedup 後候補数は対象期間の signal 数に比例するため、1 日窓時の ~30 件から週次 chunk (2-3 日窓) では ~50-90 件まで増える可能性があり、最悪ケースで 3 chunk × ~70 候補 = 週 ~210 req × 4.3 = **月 ~600-900 req** と見積もる (中央値で月 ~400-500 req)。実運用で 1,000 接触を観測したら `MAX_SIGNALS_PER_BATCH` 引き下げか足切り強化で抑制。突発的なスパイク時は `status=failed` の fail-soft 経路で吸収する
+   - Tavily 月間 req 数は **無料枠 1,000 を超過する想定** (恒常的に fail-soft 依存になる可能性が高い)。1 candidate あたり `MAX_QUERIES_PER_CANDIDATE=3` 本のクエリ + empty 時の fallback 1 本 = 平均 2.5 query/candidate。1 chunk あたりの dedup 後候補数は対象期間の signal 数に比例するため、1 日窓時の ~30 件から週次 chunk (2-3 日窓) では ~50-90 件まで増える可能性があり、中央値 60 候補 × 2.5 query × 3 chunk = 週 ~450 req × 4.3 = **月 ~1,950 req** と見積もる (最悪ケース 90 候補 × 3 query + fallback × 3 chunk × 4.3 週 = 月 ~3,500 req)。1,000 を超えた分は `searchParallel` の `status=failed` fail-soft 経路で吸収し `scoreIdea` が description のみで継続する (市場性スコアは保守的に振れるが pipeline は止まらない)。費用負担を避けたい場合は `MAX_SIGNALS_PER_BATCH` 引き下げ・足切り強化・`MAX_QUERIES_PER_CANDIDATE` を 3→2 に戻す等で抑制可能
 5. **足切り（3 条件 AND）→ `weighted_score` DESC で Top 5 を `ideas` に格納**（`role` を観測ログに出す）
    - `market_score >= 3`（市場性が確保できないアイデアは月 ¥50k に届かない）
    - `competition_score >= 3`（競合に埋もれるアイデアは個人で勝てない）
@@ -215,8 +215,8 @@
 | GitHub Actions（収集 ~7 分/週 × 7 + 分析 chunk 合計 ~6h/週 = 月 ~1,000 分） | $0（無料枠 2,000 分内） |
 | Supabase Postgres | $0（500MB 以内） |
 | Resend | $0（月 4-5 通以内） |
-| Tavily Search API | $0（中央値 月 ~400-500 req、最悪ケース 月 ~600-900 req、無料枠 1,000 内）。突発スパイク時は fail-soft |
-| **合計** | **$10〜20**（週次バッチ運用、3 chunk 並列） |
+| Tavily Search API | $0（中央値 月 ~1,950 req、最悪ケース 月 ~3,500 req で無料枠 1,000 を超過する見込み。`status=failed` の fail-soft で吸収して当面 $0 運用、頻発するなら有料プラン ~$30/月 または `MAX_QUERIES_PER_CANDIDATE` 削減で抑制） |
+| **合計** | **$10〜20**（週次バッチ運用、3 chunk 並列。Tavily 有料化時は +$30） |
 
 ## 必要な外部アカウント・シークレット
 

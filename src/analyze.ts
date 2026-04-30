@@ -125,11 +125,14 @@ const GAP_MAX_INPUTS = 25;
 
 // Sprint B-4: 1 candidate あたり最大クエリ数。
 // dedup 後の全候補をスコアリングするため、Tavily 月間 req 数は概ね
-// (候補数 ~30) × MAX_QUERIES_PER_CANDIDATE (3) × バッチ頻度に比例する。
-// 週次バッチ移行後は ~30 × 3 × 4 ≈ 360 req/月で無料枠 1,000 内に収まる前提。
-// 日次バッチ運用中は ~30 × 3 × 30 ≈ 2,700 req/月で月後半に 429 を踏むが、
-// searchParallel が status='failed' を返し scoreIdea が description のみで継続する fail-soft 経路で吸収する
+// (候補数) × MAX_QUERIES_PER_CANDIDATE (3) × chunk 数 × 週数 に比例する。
+// 週次 3 chunk 運用での見積もり (2026-04-30 SPEC.md と整合):
+//   中央値: 60 候補 × 2.5 query × 3 chunk × 4.3 週 ≒ 月 1,950 req
+//   最悪:   90 候補 × 3 query + fallback × 3 chunk × 4.3 週 ≒ 月 3,500 req
+// いずれも無料枠 1,000 を超過する想定。超過分は searchParallel が status='failed' を返し
+// scoreIdea が description のみで継続する fail-soft 経路で吸収する
 // (市場性スコアは保守的に振れるが pipeline は止まらない)。
+// 費用負担を避けたい場合は本値を 3→2 に戻すか足切り強化で候補数を絞る。
 const MAX_QUERIES_PER_CANDIDATE = 3;
 
 const CATEGORY_EN: Record<IdeaCategory, string> = {

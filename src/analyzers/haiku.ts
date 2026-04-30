@@ -68,19 +68,22 @@ type LenientHaikuClusterOutput = z.infer<typeof LenientHaikuClusterOutputSchema>
 type LenientAggregatorBundle = LenientHaikuClusterOutput['aggregator_bundles'][number];
 type LenientGapCandidate = LenientHaikuClusterOutput['gap_candidates'][number];
 
-// 1 回で受け渡しできる上限。SE 主要化の初回 ingest で最大 800 件程度のスパイクが来るため 700 に拡張。
+// 1 回で受け渡しできる上限。週次バッチの wed-fri chunk (3 日窓) で 1,000 件程度まで伸びるため 1000 に拡張。
 // Haiku 4 の input は 200k tokens。SE 本文 1500 chars 込みの実測で 1 signal ≒ 287 tokens
 // (700 signals で 201k tokens となり 200k 上限を超えた、2026-04-26 CI 失敗)。
 // 対策として buildUserPrompt 側で content を HAIKU_CONTENT_MAX_CHARS に切り詰めてから JSON 化する。
-// 700 signals × ~200 tokens/signal (切り詰め後) + system/schema 5k ≒ 145k tokens で収まる想定。
-export const HAIKU_MAX_SIGNALS = 700;
+// 1000 signals × ~150 tokens/signal (切り詰め後 600 chars 換算) + system/schema 5k ≒ 155k tokens で収まる想定。
+// 上げた直後は [haiku] signals trimmed ログと token usage を実測し、200k 接近なら
+// HAIKU_CONTENT_MAX_CHARS を更に下げる調整を入れること。
+export const HAIKU_MAX_SIGNALS = 1000;
 // 出力は 3 種類の配列で、合計 30-60 個程度を想定。余裕を持って 8192 token。
 const HAIKU_MAX_TOKENS = 8192;
 // Haiku は痛みのクラスタリング判定だけ行うので本文の細部は不要。
 // SE は collection 時点で 1500 chars cap、Hatena/Zenn/HN は元から短い。
-// 800 chars あればクラスタ判定の根拠は読み取れる (Sonnet drafter は signalsById 経由で
+// 600 chars あればクラスタ判定の根拠は読み取れる (Sonnet drafter は signalsById 経由で
 // 元の content にアクセスできるので、詳細起草の段階では full body が使える)。
-const HAIKU_CONTENT_MAX_CHARS = 800;
+// 2026-04-30: HAIKU_MAX_SIGNALS を 700→1000 に上げたのに合わせて 800→600 へ縮小し、200k 上限へのマージンを確保。
+const HAIKU_CONTENT_MAX_CHARS = 600;
 
 const HAIKU_SYSTEM = `あなたは個人開発者向けアイデア発掘パイプラインのクラスタリング担当です。
 与えられたシグナルを以下 3 種類に分類します。アイデア文は書きません。

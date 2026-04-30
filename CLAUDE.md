@@ -113,7 +113,7 @@ Stack Exchange も同じパターンを踏襲する: `stackexchange.ts` が `met
 ### HN normal ノイズフィルタ
 
 `collect.ts` は `collectHackerNews` に `normalTopByScore: 30` を渡す (SE 主要化に合わせて 100 → 30 に圧縮)。HN `normal` (Show/Ask/Launch/Tell プリフィックスなしの通常投稿) は 24h で 400+ 件発生し score 1-2 で埋もれる記事が大半なので、HN score 上位 30 件のみ採用してノイズを削る設計。`show` / `ask` / `launch` / `tell` は本数が少なく質も高いので常に全件保持する。
-Stack Exchange を主要ソースに据えた (SE 15 サイト × sort=month/hot 2 クエリ) ため、技術系バイアス低減のため HN normal と zenn count を縮小した。これにより日次の収集件数は hatena (~38) + zenn (~30) + HN 非 normal (~75) + HN normal top 30 + stackexchange 15 site (~80-150) = **定常 250-350 件**、初回 ingest 時は SE の month/hot 2 クエリ合計で 700-800 件まで伸びる想定。analyze 側の `MAX_SIGNALS_PER_BATCH` は 1200、`HAIKU_MAX_SIGNALS` は 700。閾値を触る場合はこの収支を確認すること。
+Stack Exchange を主要ソースに据えた (SE 15 サイト × sort=month/hot 2 クエリ) ため、技術系バイアス低減のため HN normal と zenn count を縮小した。これにより日次の収集件数は hatena (~38) + zenn (~30) + HN 非 normal (~75) + HN normal top 30 + stackexchange 15 site (~80-150) = **定常 250-350 件**、初回 ingest 時は SE の month/hot 2 クエリ合計で 700-800 件まで伸びる想定。analyze 側の `MAX_SIGNALS_PER_BATCH` は 1200、`HAIKU_MAX_SIGNALS` は 1000 (週次 wed-fri chunk 3 日窓で ~750-1050 件想定のため 700→1000)。`HAIKU_CONTENT_MAX_CHARS` は 600 (1000 signals × ~150 tok = 155k tok で 200k 上限内に収めるため 800→600 同時引き下げ)。閾値を触る場合はこの収支を確認すること。
 
 ### Prompt caching
 
