@@ -2,8 +2,12 @@ name: collect
 
 on:
   schedule:
-    # UTC 21 時 = JST 翌朝 6 時 (1 日 1 回)
-    - cron: '0 21 * * *'
+    # UTC 17 時 = JST 翌朝 2 時 (1 日 1 回)。
+    # 週次 deliver (Sat 08:00 JST) の前日までに 7 日分のシグナルを集めるため
+    # 朝の早い時間に固定。analyze は週次 (Sat 03:00 / 04:00 / 05:00 JST に 1h stagger
+    # で 3 chunk 起動) で走るので、土曜分の collect (02:00) → 03:00 weekend chunk
+    # 開始までに 1h のマージンを確保する。
+    - cron: '0 17 * * *'
   workflow_dispatch:
 
 concurrency:

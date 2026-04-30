@@ -2,7 +2,7 @@
 
 ## 概要
 
-個人開発で **月 ¥50k の収益** に到達するための「作るべきもの」を日次で発掘する自分用ツール。非技術の生活ペイン (Stack Exchange 15 サイト) を主要ソース、技術系情報 (Hacker News / Zenn / はてなブックマーク) を副次ソースとして「痛み」「愚痴」「ニーズ」を自動収集し、LLM で構造化・スコアリングした個人開発アイデア Top 3〜5 件を **JST 朝 7:30 の 1 日 1 回、自分宛メール** で配信する。
+個人開発で **月 ¥50k の収益** に到達するための「作るべきもの」を発掘する自分用ツール。非技術の生活ペイン (Stack Exchange 14 サイト) を主要ソース、技術系情報 (Hacker News / Zenn / はてなブックマーク) を副次ソースとして「痛み」「愚痴」「ニーズ」を自動収集し、LLM で構造化・スコアリングした個人開発アイデア Top 5 件を **JST 土曜朝 8:00 の週 1 回、自分宛メール** で配信する。日次の collect は継続し、analyze は土曜朝に 7 日分を 3 chunk 並列で処理する。
 
 ## 目的と評価軸
 
@@ -27,7 +27,7 @@
 ## スコープ
 
 - **完全に自分用**（SaaS 化しない、マルチユーザー対応なし、認証・課金・LP すべて不要）
-- **運用コスト最小化**: 月 **$30〜45** 目安（週次バッチ移行後は $20〜30、LLM API のみ、1 日 1 回配信）
+- **運用コスト最小化**: 月 **$10〜20** 目安（週次バッチ運用、LLM API のみ、週 1 回配信）
 - **成功指標（段階的）**:
   - **短期 (〜3 ヶ月)**: 月 1 件以上、**実装着手したい** と判断できるアイデアが届く
   - **中期 (〜6 ヶ月)**: このパイプライン起点で着手したプロジェクトから **初の有料ユーザー** が出る
@@ -37,16 +37,20 @@
 
 ### 実行基盤
 - **GitHub Actions**（プライベートリポジトリ想定）
-  - 収集ワークフロー: `cron: '0 21 * * *'`（UTC 21:00 = JST 翌朝 6:00、1 日 1 回）
-  - 分析ワークフロー: `cron: '30 21 * * *'`（UTC 21:30 = JST 翌朝 6:30、1 日 1 回 / timeout 45min）
-  - 配信ワークフロー: `cron: '30 22 * * *'`（UTC 22:30 = JST 翌朝 7:30、1 日 1 回 / 分析 timeout 満了から 15min のマージン）
+  - 収集ワークフロー: `cron: '0 17 * * *'`（UTC 17:00 = JST 翌朝 2:00、1 日 1 回）
+  - 分析ワークフロー (3 chunk を 1h stagger で順次起動 / 単一 `analyze.yml` を 3 つの cron で発火):
+    - `cron: '0 18 * * 5'` (JST Sat 03:00) - weekend chunk: `ANALYZE_DAYS_AGO_START=7 / END=5` (先週土日)
+    - `cron: '0 19 * * 5'` (JST Sat 04:00) - mon-tue chunk: `START=5 / END=3` (月火)
+    - `cron: '0 20 * * 5'` (JST Sat 05:00) - wed-fri chunk: `START=3 / END=0` (水木金)
+    - 各 chunk は timeout 120min。stagger により Anthropic 組織 TPM 8,000 tok/min の peak を分散させる。
+  - 配信ワークフロー: `cron: '0 23 * * 5'`（UTC Fri 23:00 = JST Sat 8:00、週 1 回 / 最遅 chunk wed-fri の timeout 満了 = JST Sat 7:00 から 1h のマージン）
 
 ### スタック
 - **言語**: Node.js 20+ / TypeScript
 - **DB**: Supabase Postgres（無料枠 500MB）
 - **LLM**:
-  - Claude Haiku: シグナルのクラスタリング（日次、大量処理）
-  - Claude Sonnet: アイデア創出（3 役割並列 / 日次）+ スコア精査（日次、少量のみ）
+  - Claude Haiku: シグナルのクラスタリング（週次、1h stagger で 3 chunk 起動、各 chunk が 2-3 日分の signals を処理）
+  - Claude Sonnet: アイデア創出（3 役割並列 × 3 chunk）+ スコア精査（同上）
 - **メール配信**: Resend（無料枠 100 通/日）
 - **競合検索**: Tavily Search API（無料枠 1,000 req/月 / Brave は 2026-02 に Free 廃止のため乗り換え）
 
@@ -130,7 +134,7 @@
 3. 3 役割の候補アイデアを合流 → 役割間 dedup → `raw_score` DESC でソート
    - **Top N で絞らない設計**: 足切り後に Top 5 を取る構造なので、ここで絞ると分母不足で配信 0 件になりやすい（実例: 2026-04-27 に market<3=10/10 で全件足切り）。よって足切りより前で件数を絞らない
 4. dedup 後の全候補を既存の Sonnet スコアリング（3 軸）に渡し、Tavily Search で類似サービス検索 → `competitors` に格納
-   - Tavily 月間 req 数は週次バッチ移行後に無料枠 1,000 内に収まる前提。日次運用中は月後半に 429 を踏むが `status=failed` の fail-soft 経路で吸収する
+   - Tavily 月間 req 数は **無料枠 1,000 を超過する想定** (恒常的に fail-soft 依存になる可能性が高い)。1 candidate あたり `MAX_QUERIES_PER_CANDIDATE=3` 本のクエリ + empty 時の fallback 1 本 = 平均 2.5 query/candidate。1 chunk あたりの dedup 後候補数は対象期間の signal 数に比例するため、1 日窓時の ~30 件から週次 chunk (2-3 日窓) では ~50-90 件まで増える可能性があり、中央値 60 候補 × 2.5 query × 3 chunk = 週 ~450 req × 4.3 = **月 ~1,950 req** と見積もる (最悪ケース 90 候補 × 3 query + fallback × 3 chunk × 4.3 週 = 月 ~3,500 req)。1,000 を超えた分は `searchParallel` の `status=failed` fail-soft 経路で吸収し `scoreIdea` が description のみで継続する (市場性スコアは保守的に振れるが pipeline は止まらない)。費用負担を避けたい場合は `MAX_SIGNALS_PER_BATCH` 引き下げ・足切り強化・`MAX_QUERIES_PER_CANDIDATE` を 3→2 に戻す等で抑制可能
 5. **足切り（3 条件 AND）→ `weighted_score` DESC で Top 5 を `ideas` に格納**（`role` を観測ログに出す）
    - `market_score >= 3`（市場性が確保できないアイデアは月 ¥50k に届かない）
    - `competition_score >= 3`（競合に埋もれるアイデアは個人で勝てない）
@@ -205,14 +209,14 @@
 
 | 項目 | コスト |
 |-----|-------|
-| Claude Haiku（クラスタリング、日次） | $1〜3 |
-| Claude Sonnet × 3 役割（アイデア起草、日次） | $12〜18 |
-| Claude Sonnet（スコア精査、dedup 後の全候補 ~30 件/run） | $15〜25 |
-| GitHub Actions（~1,200 分/月） | $0（無料枠 2,000 分内） |
+| Claude Haiku（クラスタリング、週次 × 3 chunk） | $0.5〜1 |
+| Claude Sonnet × 3 役割（アイデア起草、週次 × 3 chunk） | $4〜8 |
+| Claude Sonnet（スコア精査、dedup 後の全候補 ~30 件/run × 3 chunk） | $5〜10 |
+| GitHub Actions（収集 ~7 分/週 × 7 + 分析 chunk 合計 ~6h/週 = 月 ~1,000 分） | $0（無料枠 2,000 分内） |
 | Supabase Postgres | $0（500MB 以内） |
-| Resend | $0（月 60 通以内） |
-| Tavily Search API | 週次バッチ前提で $0（月 ~360 req、無料枠 1,000 req 内）。日次運用中は月後半 429 → fail-soft |
-| **合計** | **$30〜45**（週次バッチ移行で $20〜30） |
+| Resend | $0（月 4-5 通以内） |
+| Tavily Search API | $0（中央値 月 ~1,950 req、最悪ケース 月 ~3,500 req で無料枠 1,000 を超過する見込み。`status=failed` の fail-soft で吸収して当面 $0 運用、頻発するなら有料プラン ~$30/月 または `MAX_QUERIES_PER_CANDIDATE` 削減で抑制） |
+| **合計** | **$10〜20**（週次バッチ運用、3 chunk 並列。Tavily 有料化時は +$30） |
 
 ## 必要な外部アカウント・シークレット
 

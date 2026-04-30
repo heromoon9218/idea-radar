@@ -59,7 +59,19 @@ import {
   type SourceType,
 } from './types.js';
 
+// デフォルトの分析窓 (env 未指定時)。週次バッチ運用では env で override する。
 const WINDOW_HOURS = 24;
+// 週次バッチで chunk ごとに analyze.ts を起動するための env 変数。
+// ANALYZE_DAYS_AGO_START / END は「今 (UTC) から N 日前」を整数で指定し、
+// raw_signals.collected_at が [start, end) の範囲のものだけを対象にする。
+// 例: 土曜 UTC 18:00 (JST Sat 03:00) 起動で「先週土日」を分析するなら START=7 / END=5。
+//   - START=7 → now - 7d (= 先週土曜 UTC 18:00) より新しい
+//   - END=5   → now - 5d (= 月曜 UTC 18:00) より古い
+//   - 結果: 先週土 UTC 18:00 〜 月 UTC 18:00 の collected_at = 先週の土日収集分
+// ANALYZE_DAYS_AGO_END=0 は「現在まで」を意味する。
+// どちらかが未設定なら従来の WINDOW_HOURS=24 ベースで動く (smoke / 手動実行用の互換)。
+const ANALYZE_DAYS_AGO_START_ENV = 'ANALYZE_DAYS_AGO_START';
+const ANALYZE_DAYS_AGO_END_ENV = 'ANALYZE_DAYS_AGO_END';
 // 現行 4 ソースの日次件数内訳 (SE 主要化 + 技術系圧縮後):
 //   hatena (~38) + zenn (~30) + HN 非 normal (~75) + HN normal top 30 + stackexchange 15 site (~80-150)
 //   = 定常 ~250-350 件。初回 ingest 時は SE の sort=month/hot 2 クエリ合計で 700-800 件まで伸びる想定。
@@ -113,11 +125,14 @@ const GAP_MAX_INPUTS = 25;
 
 // Sprint B-4: 1 candidate あたり最大クエリ数。
 // dedup 後の全候補をスコアリングするため、Tavily 月間 req 数は概ね
-// (候補数 ~30) × MAX_QUERIES_PER_CANDIDATE (3) × バッチ頻度に比例する。
-// 週次バッチ移行後は ~30 × 3 × 4 ≈ 360 req/月で無料枠 1,000 内に収まる前提。
-// 日次バッチ運用中は ~30 × 3 × 30 ≈ 2,700 req/月で月後半に 429 を踏むが、
-// searchParallel が status='failed' を返し scoreIdea が description のみで継続する fail-soft 経路で吸収する
+// (候補数) × MAX_QUERIES_PER_CANDIDATE (3) × chunk 数 × 週数 に比例する。
+// 週次 3 chunk 運用での見積もり (2026-04-30 SPEC.md と整合):
+//   中央値: 60 候補 × 2.5 query × 3 chunk × 4.3 週 ≒ 月 1,950 req
+//   最悪:   90 候補 × 3 query + fallback × 3 chunk × 4.3 週 ≒ 月 3,500 req
+// いずれも無料枠 1,000 を超過する想定。超過分は searchParallel が status='failed' を返し
+// scoreIdea が description のみで継続する fail-soft 経路で吸収する
 // (市場性スコアは保守的に振れるが pipeline は止まらない)。
+// 費用負担を避けたい場合は本値を 3→2 に戻すか足切り強化で候補数を絞る。
 const MAX_QUERIES_PER_CANDIDATE = 3;
 
 const CATEGORY_EN: Record<IdeaCategory, string> = {
@@ -155,13 +170,72 @@ interface SignalRow {
   metadata: Record<string, unknown> | null;
 }
 
-async function fetchUnprocessedSignals(): Promise<SignalRow[]> {
-  const since = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString();
-  const { data, error } = await supabase
+interface AnalyzeWindow {
+  /** 範囲の下限 (含む)。ISO 8601 文字列。 */
+  since: string;
+  /** 範囲の上限 (含まない)。ISO 8601 文字列。 null なら上限なし。 */
+  until: string | null;
+  /** 観測ログ用ラベル。 */
+  label: string;
+}
+
+/**
+ * env var ANALYZE_DAYS_AGO_START / END から分析対象の collected_at 範囲を組み立てる。
+ * 両方未設定なら従来の WINDOW_HOURS ベース (直近 24h)。片方だけは設定不可 (整合性のため
+ * START / END をペアで運用する前提)。
+ *
+ * 範囲は [now - START, now - END) (END=0 なら "now まで")。週次 chunk 構成例:
+ *   - 先週土日:  START=7 / END=5
+ *   - 月火:      START=5 / END=3
+ *   - 水木金:    START=3 / END=0
+ */
+function resolveAnalyzeWindow(): AnalyzeWindow {
+  const startRaw = process.env[ANALYZE_DAYS_AGO_START_ENV];
+  const endRaw = process.env[ANALYZE_DAYS_AGO_END_ENV];
+  const hasStart = startRaw !== undefined && startRaw !== '';
+  const hasEnd = endRaw !== undefined && endRaw !== '';
+  if (hasStart !== hasEnd) {
+    throw new Error(
+      `${ANALYZE_DAYS_AGO_START_ENV} と ${ANALYZE_DAYS_AGO_END_ENV} は両方セットするか両方未設定にしてください (片方だけは禁止)`,
+    );
+  }
+  if (!hasStart) {
+    const since = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString();
+    return { since, until: null, label: `${WINDOW_HOURS}h` };
+  }
+  // ここから両方設定済み。整数として解釈し START > END ≥ 0 の制約を確認
+  // (END=0 は「now まで」を意味するので 0 を許容する)。
+  // Number.isInteger を使うのは "3.5" のような小数が env 経由で渡るケースを弾くため
+  // (Number.isFinite だけだと小数も通ってしまう)。日数指定なので整数限定で妥当。
+  const start = Number(startRaw);
+  const end = Number(endRaw);
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < 0) {
+    throw new Error(
+      `${ANALYZE_DAYS_AGO_START_ENV} / ${ANALYZE_DAYS_AGO_END_ENV} は 0 以上の整数で指定してください (start=${startRaw}, end=${endRaw})`,
+    );
+  }
+  if (start <= end) {
+    throw new Error(
+      `${ANALYZE_DAYS_AGO_START_ENV} は ${ANALYZE_DAYS_AGO_END_ENV} より大きくする必要があります (start=${start}, end=${end})`,
+    );
+  }
+  const dayMs = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const since = new Date(now - start * dayMs).toISOString();
+  const until = end === 0 ? null : new Date(now - end * dayMs).toISOString();
+  return { since, until, label: `days_ago=${start}..${end}` };
+}
+
+async function fetchUnprocessedSignals(window: AnalyzeWindow): Promise<SignalRow[]> {
+  let q = supabase
     .from('raw_signals')
     .select('id, source, title, content, url, metadata')
     .eq('processed', false)
-    .gte('collected_at', since)
+    .gte('collected_at', window.since);
+  if (window.until !== null) {
+    q = q.lt('collected_at', window.until);
+  }
+  const { data, error } = await q
     .order('collected_at', { ascending: false })
     .limit(MAX_SIGNALS_PER_BATCH);
   if (error) throw error;
@@ -682,11 +756,12 @@ function capDrafterInputs(
 
 async function main(): Promise<void> {
   const bandConfig = describeBandConfig();
+  const window = resolveAnalyzeWindow();
   console.log(
-    `[analyze] window=${WINDOW_HOURS}h, started=${new Date().toISOString()} ${bandConfig.logLine}`,
+    `[analyze] window=${window.label} since=${window.since} until=${window.until ?? 'now'}, started=${new Date().toISOString()} ${bandConfig.logLine}`,
   );
 
-  const rows = await fetchUnprocessedSignals();
+  const rows = await fetchUnprocessedSignals(window);
   console.log(`[analyze] unprocessed_signals=${rows.length}`);
   if (rows.length === 0) {
     console.log('[analyze] nothing to analyze, exiting');
