@@ -1,5 +1,5 @@
 // 未配信 ideas と紐づく raw_signals (URL) を取得する。
-// ideas.delivered_at IS NULL + 直近 24h + total_score DESC で Top 5 まで。
+// ideas.delivered_at IS NULL + 直近 7 日 (週次バッチ運用) + weighted_score DESC で Top 5 まで。
 
 import { z } from 'zod';
 import { supabase } from '../db/supabase.js';
@@ -18,12 +18,15 @@ import {
   type RiskFlag,
 } from '../types.js';
 
-const WINDOW_HOURS = 24;
+// 週次バッチで chunk 3 つ (Sat-Sun / Mon-Tue / Wed-Fri) が
+// 過去 7 日分の signals を分析して ideas を insert するので 168h ぶんを取る。
+const WINDOW_HOURS = 24 * 7;
 const TOP_N = 5;
 // reports 側で直近何日の idea_ids を「配信済み」として扱うか。
 // markIdeasDelivered が失敗して delivered_at が NULL のまま残ったケースで、
-// 翌日の fetch で同じ idea を再度拾って二重配信するのを防ぐためのガード。
-const REPORTED_LOOKBACK_DAYS = 2;
+// 次回の fetch で同じ idea を再度拾って二重配信するのを防ぐためのガード。
+// 週次運用なので前回配信から最低 7 日経過する。安全マージンを 1 週間取って 14 日。
+const REPORTED_LOOKBACK_DAYS = 14;
 
 // competitors / fermi_estimate / risk_flags / distribution_hypothesis は jsonb。
 // parse は後段 (parseXxx) に任せる。
@@ -109,7 +112,9 @@ export async function fetchUndeliveredTopIdeas(): Promise<IdeaRow[]> {
     // 個人開発ゴール (TARGET_MRR) に整合した順序で Top を選べる。
     .order('weighted_score', { ascending: false })
     .order('created_at', { ascending: false })
-    .limit(TOP_N * 2); // reports ガード除外後に TOP_N 確保するため多めに取る
+    // 週次バッチでは 3 chunks × INSERT_TOP_N=5 = 最大 15 ideas/週 が生成される。
+    // reports ガード除外後でも TOP_N (=5) を確保できるよう余裕を持って 4 倍取る。
+    .limit(TOP_N * 4);
 
   if (error) throw error;
 

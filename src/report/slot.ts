@@ -1,6 +1,7 @@
 // 配信スロットと日付ユーティリティ。
-// JST は UTC+9 で DST なし。deliver は現状 1 日 1 回 am 固定。
-// pm を追加する場合は resolveSlotBase 内で JST 時刻を見て分岐する。
+// JST は UTC+9 で DST なし。deliver は現状 週 1 回 (Sat 朝) am 固定。
+// reports.UNIQUE(date, slot) は date の自然な uniqueness で週次運用でも機能する
+// (Saturday 1 日に 1 回しか発火しない)。
 
 export type ReportSlot = 'am' | 'pm';
 

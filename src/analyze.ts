@@ -59,7 +59,19 @@ import {
   type SourceType,
 } from './types.js';
 
+// デフォルトの分析窓 (env 未指定時)。週次バッチ運用では env で override する。
 const WINDOW_HOURS = 24;
+// 週次バッチで chunk ごとに analyze.ts を起動するための env 変数。
+// ANALYZE_DAYS_AGO_START / END は「今 (UTC) から N 日前」を整数で指定し、
+// raw_signals.collected_at が [start, end) の範囲のものだけを対象にする。
+// 例: 土曜 UTC 20:00 起動で「先週土日」を分析するなら START=7 / END=5。
+//   - START=7 → now - 7d (= 先週日曜 UTC 20:00) より新しい
+//   - END=5   → now - 5d (= 月曜 UTC 20:00) より古い
+//   - 結果: 先週日 UTC 20:00 〜 月 UTC 20:00 の collected_at = 先週の土日収集分
+// ANALYZE_DAYS_AGO_END=0 は「現在まで」を意味する。
+// どちらかが未設定なら従来の WINDOW_HOURS=24 ベースで動く (smoke / 手動実行用の互換)。
+const ANALYZE_DAYS_AGO_START_ENV = 'ANALYZE_DAYS_AGO_START';
+const ANALYZE_DAYS_AGO_END_ENV = 'ANALYZE_DAYS_AGO_END';
 // 現行 4 ソースの日次件数内訳 (SE 主要化 + 技術系圧縮後):
 //   hatena (~38) + zenn (~30) + HN 非 normal (~75) + HN normal top 30 + stackexchange 15 site (~80-150)
 //   = 定常 ~250-350 件。初回 ingest 時は SE の sort=month/hot 2 クエリ合計で 700-800 件まで伸びる想定。
@@ -155,13 +167,69 @@ interface SignalRow {
   metadata: Record<string, unknown> | null;
 }
 
-async function fetchUnprocessedSignals(): Promise<SignalRow[]> {
-  const since = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString();
-  const { data, error } = await supabase
+interface AnalyzeWindow {
+  /** 範囲の下限 (含む)。ISO 8601 文字列。 */
+  since: string;
+  /** 範囲の上限 (含まない)。ISO 8601 文字列。 null なら上限なし。 */
+  until: string | null;
+  /** 観測ログ用ラベル。 */
+  label: string;
+}
+
+/**
+ * env var ANALYZE_DAYS_AGO_START / END から分析対象の collected_at 範囲を組み立てる。
+ * 両方未設定なら従来の WINDOW_HOURS ベース (直近 24h)。片方だけは設定不可 (整合性のため
+ * START / END をペアで運用する前提)。
+ *
+ * 範囲は [now - START, now - END) (END=0 なら "now まで")。週次 chunk 構成例:
+ *   - 先週土日:  START=7 / END=5
+ *   - 月火:      START=5 / END=3
+ *   - 水木金:    START=3 / END=0
+ */
+function resolveAnalyzeWindow(): AnalyzeWindow {
+  const startRaw = process.env[ANALYZE_DAYS_AGO_START_ENV];
+  const endRaw = process.env[ANALYZE_DAYS_AGO_END_ENV];
+  const hasStart = startRaw !== undefined && startRaw !== '';
+  const hasEnd = endRaw !== undefined && endRaw !== '';
+  if (hasStart !== hasEnd) {
+    throw new Error(
+      `${ANALYZE_DAYS_AGO_START_ENV} と ${ANALYZE_DAYS_AGO_END_ENV} は両方セットするか両方未設定にしてください (片方だけは禁止)`,
+    );
+  }
+  if (!hasStart) {
+    const since = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString();
+    return { since, until: null, label: `${WINDOW_HOURS}h` };
+  }
+  // ここから両方設定済み。整数として解釈し START > END > 0 の制約を確認。
+  const start = Number(startRaw);
+  const end = Number(endRaw);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < 0) {
+    throw new Error(
+      `${ANALYZE_DAYS_AGO_START_ENV} / ${ANALYZE_DAYS_AGO_END_ENV} は 0 以上の整数で指定してください (start=${startRaw}, end=${endRaw})`,
+    );
+  }
+  if (start <= end) {
+    throw new Error(
+      `${ANALYZE_DAYS_AGO_START_ENV} は ${ANALYZE_DAYS_AGO_END_ENV} より大きくする必要があります (start=${start}, end=${end})`,
+    );
+  }
+  const dayMs = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const since = new Date(now - start * dayMs).toISOString();
+  const until = end === 0 ? null : new Date(now - end * dayMs).toISOString();
+  return { since, until, label: `days_ago=${start}..${end}` };
+}
+
+async function fetchUnprocessedSignals(window: AnalyzeWindow): Promise<SignalRow[]> {
+  let q = supabase
     .from('raw_signals')
     .select('id, source, title, content, url, metadata')
     .eq('processed', false)
-    .gte('collected_at', since)
+    .gte('collected_at', window.since);
+  if (window.until !== null) {
+    q = q.lt('collected_at', window.until);
+  }
+  const { data, error } = await q
     .order('collected_at', { ascending: false })
     .limit(MAX_SIGNALS_PER_BATCH);
   if (error) throw error;
@@ -682,11 +750,12 @@ function capDrafterInputs(
 
 async function main(): Promise<void> {
   const bandConfig = describeBandConfig();
+  const window = resolveAnalyzeWindow();
   console.log(
-    `[analyze] window=${WINDOW_HOURS}h, started=${new Date().toISOString()} ${bandConfig.logLine}`,
+    `[analyze] window=${window.label} since=${window.since} until=${window.until ?? 'now'}, started=${new Date().toISOString()} ${bandConfig.logLine}`,
   );
 
-  const rows = await fetchUnprocessedSignals();
+  const rows = await fetchUnprocessedSignals(window);
   console.log(`[analyze] unprocessed_signals=${rows.length}`);
   if (rows.length === 0) {
     console.log('[analyze] nothing to analyze, exiting');

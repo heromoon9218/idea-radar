@@ -1,16 +1,23 @@
-name: collect
+name: analyze-weekend
 
+# 週次バッチ chunk 1/3: 先週の土日 (今 UTC から 7-5 日前) の raw_signals を分析。
+# 同時起動する chunk 2 (analyze-mon-tue) / chunk 3 (analyze-wed-fri) と並列で
+# Saturday 05:00 JST に発火する。
+#
+# 並列実行時の Anthropic TPM 注意:
+#   3 chunks 同時起動だと drafter / scoring 合計で組織 TPM 8,000 tok/min を超える
+#   局面が出る (実測前の机上見積りで peak 20-27k tok/min)。SDK の自動 backoff で
+#   リトライ待機が長くなる前提で timeout-minutes を 120 に引き上げて完走させる。
+#   それでも 2h で終わらないなら chunk ごとに数分 stagger するか SCORE_CONCURRENCY を
+#   env で 1 に絞る対応に切り替える。
 on:
   schedule:
-    # UTC 19 時 = JST 翌朝 4 時 (1 日 1 回)。
-    # 週次 deliver (Sat 06:30 JST) の前日までに 7 日分のシグナルを集めるため
-    # 朝の早い時間に固定。analyze は週次 (Sat 05:00 JST、3 chunk 並列) で走るので
-    # collect は日次のまま、HN normal top 30/日と SE 月次クエリの鮮度を確保する。
-    - cron: '0 19 * * *'
+    # UTC Fri 20:00 = JST Sat 05:00 (週 1 回)。
+    - cron: '0 20 * * 5'
   workflow_dispatch:
 
 concurrency:
-  group: collect
+  group: analyze-weekend
   cancel-in-progress: false
 
 permissions:
@@ -18,9 +25,9 @@ permissions:
   issues: write
 
 jobs:
-  collect:
+  analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v6
 
@@ -33,29 +40,31 @@ jobs:
 
       - run: npm run typecheck
 
-      - name: Run collector
+      - name: Run analyzer (last weekend)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: npm run collect
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          # collected_at が [now-7d, now-5d) の範囲 = 先週土日に collect された signals
+          ANALYZE_DAYS_AGO_START: '7'
+          ANALYZE_DAYS_AGO_END: '5'
+        run: npm run analyze
 
       - name: Open issue on failure
-        # cancelled() を含めるのは timeout-minutes 到達による中断を検知するため。
-        # GitHub Actions の failure() は cancel をカバーしない仕様。
         if: failure() || cancelled()
         uses: actions/github-script@v9
         with:
           script: |
             const { owner, repo } = context.repo;
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
-            const title = `[collect] workflow failed (run ${context.runId})`;
-            // 直近 24 時間に同種 Issue があればコメント追加で済ませる（Issue 乱立防止）
+            const title = `[analyze-weekend] workflow failed (run ${context.runId})`;
             const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
             const existing = await github.rest.issues.listForRepo({
               owner,
               repo,
               state: 'open',
-              labels: 'collect-failure',
+              labels: 'analyze-failure',
               since,
               per_page: 5,
             });
@@ -74,6 +83,6 @@ jobs:
                 repo,
                 title,
                 body,
-                labels: ['collect-failure'],
+                labels: ['analyze-failure'],
               });
             }
