@@ -200,7 +200,8 @@ function resolveAnalyzeWindow(): AnalyzeWindow {
     const since = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString();
     return { since, until: null, label: `${WINDOW_HOURS}h` };
   }
-  // ここから両方設定済み。整数として解釈し START > END > 0 の制約を確認。
+  // ここから両方設定済み。整数として解釈し START > END ≥ 0 の制約を確認
+  // (END=0 は「now まで」を意味するので 0 を許容する)。
   // Number.isInteger を使うのは "3.5" のような小数が env 経由で渡るケースを弾くため
   // (Number.isFinite だけだと小数も通ってしまう)。日数指定なので整数限定で妥当。
   const start = Number(startRaw);

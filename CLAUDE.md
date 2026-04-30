@@ -65,13 +65,15 @@ analyze.yml (週次 / 1 ファイル / 3 cron で 1h stagger 起動 / 各 chunk 
     (Top N で絞らない設計: 足切り後に Top 5 を取る構造なので、分母が小さいと配信 0 件になりやすい)
   → 足切り (market_score >= 3 AND competition_score >= 3 AND distribution リスク high なし)
     → weighted_score DESC で Top 5 を ideas に insert、signals を processed=true 更新
+    (技術難度の足切りは無し: 個人開発する意義があるアイデアは難度が高くても残す方針。
+     tech_score は weighted_score の重み付けには反映される)
   → 1h stagger で順次起動するため Anthropic TPM 8,000 tok/min の peak を抑える設計。
     weekend chunk が長引いて mon-tue / wed-fri と重なる局面は SDK 自動 backoff で吸収。
     2h でも完走しないなら更に stagger を伸ばすか SCORE_CONCURRENCY=1 への切り替えを検討。
 
 deliver.yml (UTC Fri 23:00 = JST Sat 08:00、週次 / 最遅 chunk wed-fri の timeout 満了から 1h マージン)
   → src/deliver.ts
-  → ideas (delivered_at IS NULL, 直近 7 日, weighted_score DESC) Top 5 を選択
+  → ideas (delivered_at IS NULL, 直近 8 日 = 週次 7 日窓 + 1 日リカバリ余裕, weighted_score DESC) Top 5 を選択
   → Markdown + HTML 生成 → Resend 送信
   → reports insert / ideas.delivered_at 更新（配信物はメールのみで、リポジトリへはコミットしない）
 ```

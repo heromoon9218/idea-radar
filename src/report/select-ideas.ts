@@ -1,5 +1,5 @@
 // 未配信 ideas と紐づく raw_signals (URL) を取得する。
-// ideas.delivered_at IS NULL + 直近 7 日 (週次バッチ運用) + weighted_score DESC で Top 5 まで。
+// ideas.delivered_at IS NULL + 直近 8 日 (週次バッチ運用 + リカバリ余裕) + weighted_score DESC で Top 5 まで。
 
 import { z } from 'zod';
 import { supabase } from '../db/supabase.js';
@@ -19,8 +19,12 @@ import {
 } from '../types.js';
 
 // 週次バッチで chunk 3 つ (Sat-Sun / Mon-Tue / Wed-Fri) が
-// 過去 7 日分の signals を分析して ideas を insert するので 168h ぶんを取る。
-const WINDOW_HOURS = 24 * 7;
+// 過去 7 日分の signals を分析して ideas を insert するので 168h を基準に取る。
+// ただし「ある週の deliver が失敗 → 翌週リカバリ」の境界ケースで、weekend chunk が
+// 生成した ideas (Sat 03:30 頃 insert) が次週の Sat 08:00 deliver 時点で 7d 4.5h ≈ 172.5h
+// 経過してしまい 168h 窓外に脱落する。これを救うため 192h (= 8 日) を採用。
+// raw_signals の retention (30 日) には十分収まる。
+const WINDOW_HOURS = 24 * 8;
 const TOP_N = 5;
 // reports 側で直近何日の idea_ids を「配信済み」として扱うか。
 // markIdeasDelivered が失敗して delivered_at が NULL のまま残ったケースで、
