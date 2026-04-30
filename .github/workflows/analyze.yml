@@ -9,9 +9,13 @@ name: analyze
 #   wed-fri chunk: Sat 05:00 (UTC Fri 20:00) - START=3 / END=0 (水木金)
 # deliver (JST Sat 08:00) は wed-fri の最遅完了 (05:00 + 120min = 07:00) から 1h マージン。
 #
-# 1h stagger により weekend phase の終盤に mon-tue が重なる程度まで抑える設計。
-# それでも 2h で完走しない chunk が出るなら更に stagger を伸ばすか
-# SCORE_CONCURRENCY=1 への切替を検討する (現状は env で渡していないので analyze.ts の既定値 2)。
+# 1h stagger は通常完走 (各 chunk 30-60min) を前提とした peak 分散設計。
+# 全 chunk が timeout 上限 (120min) まで走った最悪ケースでは:
+#   05:00-06:00: weekend × mon-tue × wed-fri の 3 chunk が同時並行
+#   06:00-07:00: mon-tue × wed-fri の 2 chunk が同時並行
+# Anthropic SDK 自動 backoff で吸収する想定だが、実運用で TPM 上限への接触が観測されたら
+# stagger 間隔を伸ばすか SCORE_CONCURRENCY=1 への切替を検討する
+# (現状は env で渡していないので analyze.ts の既定値 2)。
 #
 # 1 ファイルに統合した理由: 3 chunk は処理本体が同一で、env 2 つ (START / END) と
 # 起動 cron だけが違う。ファイルを 3 分割すると修正のたびに 3 箇所同期する必要があり保守負担が高い。
@@ -37,6 +41,11 @@ concurrency:
   # chunk ごとに concurrency group を分けて、1 chunk の rerun が他 chunk と
   # queue 干渉しないようにする。schedule の場合は cron 文字列、workflow_dispatch
   # の場合は inputs.chunk から chunk 名を解決する。
+  #
+  # NOTE: cron 文字列 → chunk 名のマッピングは下の "Resolve chunk parameters" step
+  # の case 文 (jobs.analyze.steps[0]) と二重定義になっている。concurrency は step
+  # output を参照できない (job 開始前に評価される) ため避けられない構造。
+  # cron を変更するときは両方を必ず同期すること。
   group: analyze-${{ github.event.schedule == '0 18 * * 5' && 'weekend' || github.event.schedule == '0 19 * * 5' && 'mon-tue' || github.event.schedule == '0 20 * * 5' && 'wed-fri' || github.event.inputs.chunk }}
   cancel-in-progress: false
 
