@@ -45,16 +45,19 @@ types.ts      zod スキーマ + 型定義の集約
 ### パイプライン（GitHub Actions cron、collect は日次 / analyze + deliver は週次）
 
 ```
-collect.yml (UTC 19:00 = JST 04:00、日次)
+collect.yml (UTC 17:00 = JST 02:00、日次)
   → src/collect.ts
   → 4 ソース (hatena / zenn / hackernews / stackexchange) 並列取得
   → raw_signals に UNIQUE(source, external_id) で重複除外 upsert
 
-analyze-{weekend,mon-tue,wed-fri}.yml (UTC Fri 20:00 = JST Sat 05:00、週次 / timeout 120min / 3 並列)
+analyze.yml (週次 / 1 ファイル / 3 cron で 1h stagger 起動 / 各 chunk timeout 120min)
   → src/analyze.ts (env: ANALYZE_DAYS_AGO_START / END で chunk の collected_at 範囲を指定)
-    - analyze-weekend:  START=7  / END=5 (先週土日)
-    - analyze-mon-tue:  START=5  / END=3 (月火)
-    - analyze-wed-fri:  START=3  / END=0 (水木金)
+    - cron '0 18 * * 5' (JST Sat 03:00) → weekend chunk: START=7 / END=5 (先週土日)
+    - cron '0 19 * * 5' (JST Sat 04:00) → mon-tue chunk: START=5 / END=3 (月火)
+    - cron '0 20 * * 5' (JST Sat 05:00) → wed-fri chunk: START=3 / END=0 (水木金)
+  → workflow 起動時に "Resolve chunk parameters" step が cron 文字列または
+    workflow_dispatch.inputs.chunk から chunk 名 / START / END を解決する。
+    concurrency.group も `analyze-${chunk}` で chunk ごとに分離し、rerun が干渉しない。
   → 各 chunk は raw_signals (processed=false, [now-START, now-END) の collected_at) を Haiku でクラスタリング
     (aggregator_bundles ≥3 / combinator_pairs ≥3 / gap_candidates ≥1 の 3 種類に分類)
   → Sonnet × 3 役割を並列実行してアイデア起草 (集約者 / 結合者 / 隙間発見者)
@@ -62,10 +65,11 @@ analyze-{weekend,mon-tue,wed-fri}.yml (UTC Fri 20:00 = JST Sat 05:00、週次 / 
     (Top N で絞らない設計: 足切り後に Top 5 を取る構造なので、分母が小さいと配信 0 件になりやすい)
   → 足切り (market_score >= 3 AND competition_score >= 3 AND distribution リスク high なし)
     → weighted_score DESC で Top 5 を ideas に insert、signals を processed=true 更新
-  → 3 chunks 並列で Anthropic TPM 8,000 tok/min を超過する局面あり (SDK 自動 backoff で吸収)。
-    2h でも完走しないなら chunk stagger or SCORE_CONCURRENCY=1 への切り替えを検討。
+  → 1h stagger で順次起動するため Anthropic TPM 8,000 tok/min の peak を抑える設計。
+    weekend chunk が長引いて mon-tue / wed-fri と重なる局面は SDK 自動 backoff で吸収。
+    2h でも完走しないなら更に stagger を伸ばすか SCORE_CONCURRENCY=1 への切り替えを検討。
 
-deliver.yml (UTC Fri 23:00 = JST Sat 08:00、週次 / analyze timeout 満了から 1h マージン)
+deliver.yml (UTC Fri 23:00 = JST Sat 08:00、週次 / 最遅 chunk wed-fri の timeout 満了から 1h マージン)
   → src/deliver.ts
   → ideas (delivered_at IS NULL, 直近 7 日, weighted_score DESC) Top 5 を選択
   → Markdown + HTML 生成 → Resend 送信

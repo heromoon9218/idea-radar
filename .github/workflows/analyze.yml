@@ -1,0 +1,138 @@
+name: analyze
+
+# 週次バッチ: 7 日分の raw_signals を 3 chunk (weekend / mon-tue / wed-fri) に分けて分析する。
+# Anthropic 組織 TPM 8,000 tok/min を超える局面を避けるため 1h 間隔で stagger 起動する。
+#
+# Schedule (JST):
+#   weekend chunk: Sat 03:00 (UTC Fri 18:00) - START=7 / END=5 (先週土日)
+#   mon-tue chunk: Sat 04:00 (UTC Fri 19:00) - START=5 / END=3 (月火)
+#   wed-fri chunk: Sat 05:00 (UTC Fri 20:00) - START=3 / END=0 (水木金)
+# deliver (JST Sat 08:00) は wed-fri の最遅完了 (05:00 + 120min = 07:00) から 1h マージン。
+#
+# 1h stagger により weekend phase の終盤に mon-tue が重なる程度まで抑える設計。
+# それでも 2h で完走しない chunk が出るなら更に stagger を伸ばすか
+# SCORE_CONCURRENCY=1 への切替を検討する (現状は env で渡していないので analyze.ts の既定値 2)。
+#
+# 1 ファイルに統合した理由: 3 chunk は処理本体が同一で、env 2 つ (START / END) と
+# 起動 cron だけが違う。ファイルを 3 分割すると修正のたびに 3 箇所同期する必要があり保守負担が高い。
+
+on:
+  schedule:
+    - cron: '0 18 * * 5'  # weekend (JST Sat 03:00)
+    - cron: '0 19 * * 5'  # mon-tue (JST Sat 04:00)
+    - cron: '0 20 * * 5'  # wed-fri (JST Sat 05:00)
+  workflow_dispatch:
+    inputs:
+      chunk:
+        description: 'Chunk to run (weekend / mon-tue / wed-fri)'
+        required: true
+        type: choice
+        default: 'wed-fri'
+        options:
+          - weekend
+          - mon-tue
+          - wed-fri
+
+concurrency:
+  # chunk ごとに concurrency group を分けて、1 chunk の rerun が他 chunk と
+  # queue 干渉しないようにする。schedule の場合は cron 文字列、workflow_dispatch
+  # の場合は inputs.chunk から chunk 名を解決する。
+  group: analyze-${{ github.event.schedule == '0 18 * * 5' && 'weekend' || github.event.schedule == '0 19 * * 5' && 'mon-tue' || github.event.schedule == '0 20 * * 5' && 'wed-fri' || github.event.inputs.chunk }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Resolve chunk parameters
+        id: chunk
+        # cron / workflow_dispatch の双方から chunk 名 + START / END を出力する。
+        # 後段 step の env と Issue 起票でこの outputs を参照する。
+        run: |
+          CRON='${{ github.event.schedule }}'
+          INPUT_CHUNK='${{ github.event.inputs.chunk }}'
+          case "$CRON" in
+            "0 18 * * 5") NAME=weekend; START=7; END=5 ;;
+            "0 19 * * 5") NAME=mon-tue; START=5; END=3 ;;
+            "0 20 * * 5") NAME=wed-fri; START=3; END=0 ;;
+            *)
+              case "$INPUT_CHUNK" in
+                weekend) NAME=weekend; START=7; END=5 ;;
+                mon-tue) NAME=mon-tue; START=5; END=3 ;;
+                wed-fri) NAME=wed-fri; START=3; END=0 ;;
+                *) echo "Unknown chunk (cron='$CRON' input='$INPUT_CHUNK')"; exit 1 ;;
+              esac
+              ;;
+          esac
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "start=$START" >> "$GITHUB_OUTPUT"
+          echo "end=$END" >> "$GITHUB_OUTPUT"
+          echo "[chunk] name=$NAME start=$START end=$END (cron='$CRON' input='$INPUT_CHUNK')"
+
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - name: Run analyzer (${{ steps.chunk.outputs.name }})
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          ANALYZE_DAYS_AGO_START: ${{ steps.chunk.outputs.start }}
+          ANALYZE_DAYS_AGO_END: ${{ steps.chunk.outputs.end }}
+        run: npm run analyze
+
+      - name: Open issue on failure
+        # cancelled() を含めるのは timeout-minutes 到達による中断を検知するため。
+        # GitHub Actions の failure() は cancel をカバーしない仕様。
+        if: failure() || cancelled()
+        uses: actions/github-script@v9
+        env:
+          CHUNK_NAME: ${{ steps.chunk.outputs.name }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const chunkName = process.env.CHUNK_NAME || 'unknown';
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            const title = `[analyze-${chunkName}] workflow failed (run ${context.runId})`;
+            // 直近 24 時間に同種 Issue があればコメント追加で済ませる (Issue 乱立防止)
+            const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+            const existing = await github.rest.issues.listForRepo({
+              owner,
+              repo,
+              state: 'open',
+              labels: 'analyze-failure',
+              since,
+              per_page: 5,
+            });
+            const body = `workflow が失敗しました。\n\nchunk: ${chunkName}\nrun: ${runUrl}\ntime: ${new Date().toISOString()}`;
+            if (existing.data.length > 0) {
+              const issue = existing.data[0];
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner,
+                repo,
+                title,
+                body,
+                labels: ['analyze-failure'],
+              });
+            }

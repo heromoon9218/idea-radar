@@ -64,10 +64,10 @@ const WINDOW_HOURS = 24;
 // 週次バッチで chunk ごとに analyze.ts を起動するための env 変数。
 // ANALYZE_DAYS_AGO_START / END は「今 (UTC) から N 日前」を整数で指定し、
 // raw_signals.collected_at が [start, end) の範囲のものだけを対象にする。
-// 例: 土曜 UTC 20:00 起動で「先週土日」を分析するなら START=7 / END=5。
-//   - START=7 → now - 7d (= 先週日曜 UTC 20:00) より新しい
-//   - END=5   → now - 5d (= 月曜 UTC 20:00) より古い
-//   - 結果: 先週日 UTC 20:00 〜 月 UTC 20:00 の collected_at = 先週の土日収集分
+// 例: 土曜 UTC 18:00 (JST Sat 03:00) 起動で「先週土日」を分析するなら START=7 / END=5。
+//   - START=7 → now - 7d (= 先週土曜 UTC 18:00) より新しい
+//   - END=5   → now - 5d (= 月曜 UTC 18:00) より古い
+//   - 結果: 先週土 UTC 18:00 〜 月 UTC 18:00 の collected_at = 先週の土日収集分
 // ANALYZE_DAYS_AGO_END=0 は「現在まで」を意味する。
 // どちらかが未設定なら従来の WINDOW_HOURS=24 ベースで動く (smoke / 手動実行用の互換)。
 const ANALYZE_DAYS_AGO_START_ENV = 'ANALYZE_DAYS_AGO_START';
@@ -201,9 +201,11 @@ function resolveAnalyzeWindow(): AnalyzeWindow {
     return { since, until: null, label: `${WINDOW_HOURS}h` };
   }
   // ここから両方設定済み。整数として解釈し START > END > 0 の制約を確認。
+  // Number.isInteger を使うのは "3.5" のような小数が env 経由で渡るケースを弾くため
+  // (Number.isFinite だけだと小数も通ってしまう)。日数指定なので整数限定で妥当。
   const start = Number(startRaw);
   const end = Number(endRaw);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < 0) {
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < 0) {
     throw new Error(
       `${ANALYZE_DAYS_AGO_START_ENV} / ${ANALYZE_DAYS_AGO_END_ENV} は 0 以上の整数で指定してください (start=${startRaw}, end=${endRaw})`,
     );

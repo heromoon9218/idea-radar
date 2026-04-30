@@ -27,7 +27,7 @@
 ## スコープ
 
 - **完全に自分用**（SaaS 化しない、マルチユーザー対応なし、認証・課金・LP すべて不要）
-- **運用コスト最小化**: 月 **$20〜30** 目安（週次バッチ運用、LLM API のみ、週 1 回配信）
+- **運用コスト最小化**: 月 **$10〜20** 目安（週次バッチ運用、LLM API のみ、週 1 回配信）
 - **成功指標（段階的）**:
   - **短期 (〜3 ヶ月)**: 月 1 件以上、**実装着手したい** と判断できるアイデアが届く
   - **中期 (〜6 ヶ月)**: このパイプライン起点で着手したプロジェクトから **初の有料ユーザー** が出る
@@ -37,18 +37,19 @@
 
 ### 実行基盤
 - **GitHub Actions**（プライベートリポジトリ想定）
-  - 収集ワークフロー: `cron: '0 19 * * *'`（UTC 19:00 = JST 翌朝 4:00、1 日 1 回）
-  - 分析ワークフロー (3 chunk 並列): いずれも `cron: '0 20 * * 5'`（UTC Fri 20:00 = JST Sat 5:00、週 1 回 / timeout 120min）
-    - `analyze-weekend.yml`: 先週土日分 (`ANALYZE_DAYS_AGO_START=7 / END=5`)
-    - `analyze-mon-tue.yml`: 月火分 (`START=5 / END=3`)
-    - `analyze-wed-fri.yml`: 水木金分 (`START=3 / END=0`)
-  - 配信ワークフロー: `cron: '0 23 * * 5'`（UTC Fri 23:00 = JST Sat 8:00、週 1 回 / 分析 timeout 満了から 1h のマージン）
+  - 収集ワークフロー: `cron: '0 17 * * *'`（UTC 17:00 = JST 翌朝 2:00、1 日 1 回）
+  - 分析ワークフロー (3 chunk を 1h stagger で順次起動 / 単一 `analyze.yml` を 3 つの cron で発火):
+    - `cron: '0 18 * * 5'` (JST Sat 03:00) - weekend chunk: `ANALYZE_DAYS_AGO_START=7 / END=5` (先週土日)
+    - `cron: '0 19 * * 5'` (JST Sat 04:00) - mon-tue chunk: `START=5 / END=3` (月火)
+    - `cron: '0 20 * * 5'` (JST Sat 05:00) - wed-fri chunk: `START=3 / END=0` (水木金)
+    - 各 chunk は timeout 120min。stagger により Anthropic 組織 TPM 8,000 tok/min の peak を分散させる。
+  - 配信ワークフロー: `cron: '0 23 * * 5'`（UTC Fri 23:00 = JST Sat 8:00、週 1 回 / 最遅 chunk wed-fri の timeout 満了 = JST Sat 7:00 から 1h のマージン）
 
 ### スタック
 - **言語**: Node.js 20+ / TypeScript
 - **DB**: Supabase Postgres（無料枠 500MB）
 - **LLM**:
-  - Claude Haiku: シグナルのクラスタリング（週次、3 chunk 並列、各 chunk が 2-3 日分の signals を処理）
+  - Claude Haiku: シグナルのクラスタリング（週次、1h stagger で 3 chunk 起動、各 chunk が 2-3 日分の signals を処理）
   - Claude Sonnet: アイデア創出（3 役割並列 × 3 chunk）+ スコア精査（同上）
 - **メール配信**: Resend（無料枠 100 通/日）
 - **競合検索**: Tavily Search API（無料枠 1,000 req/月 / Brave は 2026-02 に Free 廃止のため乗り換え）
@@ -133,7 +134,7 @@
 3. 3 役割の候補アイデアを合流 → 役割間 dedup → `raw_score` DESC でソート
    - **Top N で絞らない設計**: 足切り後に Top 5 を取る構造なので、ここで絞ると分母不足で配信 0 件になりやすい（実例: 2026-04-27 に market<3=10/10 で全件足切り）。よって足切りより前で件数を絞らない
 4. dedup 後の全候補を既存の Sonnet スコアリング（3 軸）に渡し、Tavily Search で類似サービス検索 → `competitors` に格納
-   - Tavily 月間 req 数は週次バッチ運用 (週 ~270 req × 4-5 = 月 ~1,200 req) で無料枠 1,000 を僅かに上回る局面あり。`status=failed` の fail-soft 経路で吸収する
+   - Tavily 月間 req 数は週次バッチ運用 (3 chunk × dedup 後 ~30 候補 = 週 ~90 req × 4-5 = 月 ~360-450 req) で無料枠 1,000 内に十分収まる。突発的なスパイク時は `status=failed` の fail-soft 経路で吸収する
 5. **足切り（3 条件 AND）→ `weighted_score` DESC で Top 5 を `ideas` に格納**（`role` を観測ログに出す）
    - `market_score >= 3`（市場性が確保できないアイデアは月 ¥50k に届かない）
    - `competition_score >= 3`（競合に埋もれるアイデアは個人で勝てない）
@@ -214,7 +215,7 @@
 | GitHub Actions（収集 ~7 分/週 × 7 + 分析 chunk 合計 ~6h/週 = 月 ~1,000 分） | $0（無料枠 2,000 分内） |
 | Supabase Postgres | $0（500MB 以内） |
 | Resend | $0（月 4-5 通以内） |
-| Tavily Search API | 月 ~1,200 req で無料枠 1,000 を僅かに上回る局面あり、超過時は fail-soft |
+| Tavily Search API | $0（月 ~360-450 req、無料枠 1,000 内）。突発スパイク時は fail-soft |
 | **合計** | **$10〜20**（週次バッチ運用、3 chunk 並列） |
 
 ## 必要な外部アカウント・シークレット

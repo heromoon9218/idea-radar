@@ -3,9 +3,9 @@ name: deliver
 on:
   schedule:
     # UTC Fri 23:00 = JST Sat 08:00 (週 1 回)。
-    # 3 つの analyze chunk (analyze-weekend / analyze-mon-tue / analyze-wed-fri) は
-    # UTC Fri 20:00 開始 / timeout 120min なので、最長 UTC Fri 22:00 (= JST Sat 07:00)
-    # に終わる。deliver はそこから 1h マージンを取って UTC Fri 23:00 開始。
+    # analyze workflow は 1h stagger で 3 chunk (weekend / mon-tue / wed-fri) を順に起動し、
+    # 最遅 chunk (wed-fri) が UTC Fri 20:00 開始 / timeout 120min = UTC Fri 22:00
+    # (JST Sat 07:00) に終わる。deliver はそこから 1h マージンを取って UTC Fri 23:00 開始。
     - cron: '0 23 * * 5'
   workflow_dispatch:
 
